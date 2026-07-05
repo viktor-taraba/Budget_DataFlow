@@ -23,7 +23,8 @@
   {% endwith %}
 
   <div class="card">
-    <form method="post" action="{{ url_for('submit') }}">
+	<form method="post" action="{{ url_for('submit') }}" id="entry-form">
+      <input type="hidden" name="submitted_at" id="submitted_at">
       <div class="segmented">
         <input type="radio" id="type-expense" name="type" value="expense" checked>
         <input type="radio" id="type-income" name="type" value="income">
@@ -65,31 +66,37 @@
   <a class="footer-link" href="{{ url_for('logout') }}">Вийти</a>
 
   <script>
-    const categories = {
-      expense: {{ categories.expense | tojson }},
-      income: {{ categories.income | tojson }}
-    };
+	  const categories = {
+	  expense: {{ categories.expense | tojson }},
+	  income: {{ categories.income | tojson }}
+	  };
 
-    const select = document.getElementById('category');
-    const radios = document.querySelectorAll('input[name="type"]');
+	  const select = document.getElementById('category');
+	  const radios = document.querySelectorAll('input[name="type"]');
 
-    function fillCategories(type) {
-      select.innerHTML = '';
-      categories[type].forEach((cat) => {
-        const opt = document.createElement('option');
-        opt.value = cat;
-        opt.textContent = cat;
-        select.appendChild(opt);
-      });
-    }
+	  function fillCategories(type) {
+	  select.innerHTML = '';
+	  categories[type].forEach((cat) => {
+	  const opt = document.createElement('option');
+	  opt.value = cat;
+	  opt.textContent = cat;
+	  select.appendChild(opt);
+	  });
+	  }
 
-    radios.forEach((r) => r.addEventListener('change', (e) => fillCategories(e.target.value)));
-    fillCategories(document.querySelector('input[name="type"]:checked').value);
+	  radios.forEach((r) => r.addEventListener('change', (e) => fillCategories(e.target.value)));
+	  fillCategories(document.querySelector('input[name="type"]:checked').value);
 
-    // Дозволяємо кому як десятковий роздільник
-    document.getElementById('amount').addEventListener('input', (e) => {
-      e.target.value = e.target.value.replace(/[^0-9.,]/g, '');
-    });
+	  // Фіксуємо момент, коли користувач фактично натиснув "Зберегти",
+	  // а не коли відкрив сторінку.
+	  document.getElementById('entry-form').addEventListener('submit', () => {
+	    document.getElementById('submitted_at').value = new Date().toISOString();
+	  });
+
+	  // Дозволяємо кому як десятковий роздільник
+	  document.getElementById('amount').addEventListener('input', (e) => {
+	  e.target.value = e.target.value.replace(/[^0-9.,]/g, '');
+	  });
   </script>
 </body>
 </html>
