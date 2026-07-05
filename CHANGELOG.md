@@ -1,2 +1,3 @@
 [06.07.2026]
-- додано Rate-limiting на /login
+- Rate-limiting на /login
+- іконки для категорій
