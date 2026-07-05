@@ -3,6 +3,9 @@ import json
 from datetime import date, datetime, timezone
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, flash
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
 import gspread
 from google.oauth2.service_account import Credentials
@@ -14,6 +17,14 @@ app = Flask(__name__)
 app.secret_key = os.environ["FLASK_SECRET_KEY"]
 SHEET_ID = os.environ["GOOGLE_SHEET_ID"]
 APP_PASSWORD = os.environ["APP_PASSWORD"]
+
+# Render (і більшість хостингів) стоїть за проксі: без цього request.remote_addr завжди буде адресою проксі, а не клієнта,
+# і rate-limit нижче рахуватиме всіх користувачів як одного.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
+
+# Обмеження кількості спроб входу — захист від підбору пароля.
+# Рахує спроби по реальному IP клієнта (див. ProxyFix вище); при перевищенні повертає 429 Too Many Requests.
+limiter = Limiter(get_remote_address, app=app, default_limits=[])
 
 # Google Sheets
 _gs_client = None
@@ -51,6 +62,7 @@ def login_required(view):
 
 
 @app.route("/login", methods=["GET", "POST"])
+@limiter.limit("5 per minute", methods=["POST"])
 def login():
     if request.method == "POST":
         if request.form.get("password") == APP_PASSWORD:
@@ -59,6 +71,12 @@ def login():
             return redirect(request.args.get("next") or url_for("index"))
         flash("Невірний пароль")
     return render_template("login.html")
+
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    flash("Забагато спроб входу. Спробуйте ще раз за хвилину.")
+    return render_template("login.html"), 429
 
 
 @app.route("/logout")
@@ -122,7 +140,7 @@ def submit():
 
     try:
         append_row(entry_type, row)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc: 
         flash(f"Помилка запису в таблицю: {exc}")
         return redirect(url_for("index"))
 
