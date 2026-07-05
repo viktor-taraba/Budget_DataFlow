@@ -6,39 +6,13 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from dotenv import load_dotenv
 import gspread
 from google.oauth2.service_account import Credentials
+from config import CATEGORIES, COLUMN_ORDER, WORKSHEET_EXPENSE, WORKSHEET_INCOME
 
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.environ["FLASK_SECRET_KEY"]
 SHEET_ID = os.environ["GOOGLE_SHEET_ID"]
-WORKSHEET_EXPENSE = "Витрати"
-WORKSHEET_INCOME = "Доходи"
-COLUMN_ORDER = ["date", "category", "amount", "note", "submitted_at", "added_at", "device_info"]
-
-CATEGORIES = {
-    "expense": [
-        "Продукти",
-        "Кафе та ресторани",
-        "Транспорт",
-        "Житло та комунальні",
-        "Здоров'я",
-        "Одяг",
-        "Розваги",
-        "Підписки",
-        "Подарунки",
-        "Інше",
-    ],
-    "income": [
-        "Зарплата",
-        "Фріланс",
-        "Подарунок",
-        "Повернення боргу",
-        "Інвестиції",
-        "Інше",
-    ],
-}
-
 APP_PASSWORD = os.environ["APP_PASSWORD"]
 
 # Google Sheets
