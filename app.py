@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from dotenv import load_dotenv
@@ -14,7 +14,7 @@ app.secret_key = os.environ["FLASK_SECRET_KEY"]
 SHEET_ID = os.environ["GOOGLE_SHEET_ID"]
 WORKSHEET_EXPENSE = "Витрати"
 WORKSHEET_INCOME = "Доходи"
-COLUMN_ORDER = ["date", "category", "amount", "note"]
+COLUMN_ORDER = ["date", "category", "amount", "note", "submitted_at", "added_at", "device_info"]
 
 CATEGORIES = {
     "expense": [
@@ -141,6 +141,9 @@ def submit():
         "category": category,
         "amount": amount,
         "note": note,
+        "submitted_at": request.form.get("submitted_at", ""),
+        "added_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "device_info": request.headers.get("User-Agent", "unknown"),
     }
 
     try:
