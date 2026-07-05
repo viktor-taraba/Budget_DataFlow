@@ -1,0 +1,245 @@
+:root {
+  --bg: #EEF0EE;
+  --surface: #FFFFFF;
+  --ink: #202A2E;
+  --ink-soft: #64706F;
+  --line: #DADFDC;
+  --navy: #24344D;
+  --navy-soft: #E7EAF0;
+
+  --accent: var(--navy);
+  --accent-soft: var(--navy-soft);
+
+  --income: #2F8F6B;
+  --income-soft: #E1F1EA;
+  --expense: #AD4A34;
+  --expense-soft: #F4E4DF;
+
+  --radius: 18px;
+  --shadow: 0 1px 2px rgba(32, 42, 46, 0.06), 0 8px 24px rgba(32, 42, 46, 0.08);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 28px 16px 48px;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.brand__mark {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: background 0.25s ease;
+}
+
+.brand__title {
+  font-family: "Fraunces", Georgia, serif;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.brand__title span {
+  color: var(--ink-soft);
+  font-weight: 400;
+}
+
+.card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  border-top: 4px solid var(--accent);
+  padding: 24px 20px 20px;
+  transition: border-color 0.25s ease;
+}
+
+/* Сегментований перемикач Дохід / Витрата — головний акцент інтерфейсу */
+.segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  background: var(--bg);
+  border-radius: 12px;
+  padding: 4px;
+  margin-bottom: 22px;
+  position: relative;
+}
+
+.segmented input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.segmented label {
+  text-align: center;
+  padding: 11px 0;
+  border-radius: 9px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+  user-select: none;
+}
+
+#type-expense:checked ~ .segmented__track label[for="type-expense"] {
+  background: var(--expense-soft);
+  color: var(--expense);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+#type-income:checked ~ .segmented__track label[for="type-income"] {
+  background: var(--income-soft);
+  color: var(--income);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+.field {
+  margin-bottom: 16px;
+}
+
+.field label.field-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin-bottom: 7px;
+}
+
+.amount-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 14px;
+  background: var(--bg);
+  transition: border-color 0.2s ease;
+}
+
+.amount-wrap:focus-within {
+  border-color: var(--accent);
+}
+
+.amount-wrap .currency {
+  font-family: "JetBrains Mono", "Courier New", monospace;
+  font-size: 18px;
+  color: var(--ink-soft);
+}
+
+input[name="amount"] {
+  border: none;
+  background: transparent;
+  outline: none;
+  font-family: "JetBrains Mono", "Courier New", monospace;
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--ink);
+  width: 100%;
+  min-width: 0;
+}
+
+select, input[type="date"], input[type="text"] {
+  width: 100%;
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 15px;
+  font-family: inherit;
+  background: var(--bg);
+  color: var(--ink);
+  outline: none;
+  transition: border-color 0.2s ease;
+  appearance: none;
+}
+
+select {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='9'><path d='M1 1l6 6 6-6' stroke='%2364706F' stroke-width='1.6' fill='none' fill-rule='evenodd'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  padding-right: 36px;
+}
+
+select:focus, input[type="date"]:focus, input[type="text"]:focus {
+  border-color: var(--accent);
+}
+
+.submit-btn {
+  width: 100%;
+  border: none;
+  border-radius: 12px;
+  padding: 15px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+  margin-top: 6px;
+  transition: background 0.2s ease, transform 0.05s ease;
+}
+
+.submit-btn:active {
+  transform: scale(0.98);
+}
+
+.flash {
+  width: 100%;
+  max-width: 420px;
+  margin-bottom: 14px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: 14px;
+  background: var(--expense-soft);
+  color: var(--expense);
+}
+
+.flash--success {
+  background: var(--income-soft);
+  color: var(--income);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 340px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 28px 22px;
+  margin-top: 40px;
+}
+
+.login-card input[type="password"] {
+  margin-bottom: 14px;
+}
+
+.footer-link {
+  margin-top: 18px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  text-decoration: none;
+}

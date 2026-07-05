@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+/.vs
+
+credentials.json
+/test.py
+/README_test.md
+/budgetapp-501518-238205dbf77e.json
