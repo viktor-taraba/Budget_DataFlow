@@ -1,9 +1,9 @@
-#!/usr/bin/env bash
-# Запускається автоматично перед git push (див. README про встановлення).
-# Якщо хоч один тест падає — push скасовується.
+#!/bin/sh
+# Запускається автоматично перед git commit (див. README про встановлення).
+# Якщо хоч один тест падає — commit скасовується.
 set -e
 
-echo "🔎 Запускаю тести перед push..."
+echo "🔎 Запускаю тести перед commit..."
 
 if [ -x ".venv/bin/python" ]; then
      PYTHON=".venv/bin/python"
@@ -15,10 +15,10 @@ fi
 
 if ! $PYTHON -m pytest -q; then
     echo ""
-    echo "❌ Тести не пройшли. Push скасовано."
+    echo "❌ Тести не пройшли. Commit скасовано."
     echo "   Виправте помилки або запустіть 'pytest -v' для деталей."
     exit 1
 fi
 
-echo "✅ Усі тести пройшли — push дозволено."
+echo "✅ Усі тести пройшли — commit дозволено."
 exit 0
