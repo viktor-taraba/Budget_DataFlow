@@ -73,6 +73,46 @@
     </form>
   </div>
 
+  <div class="card recent-card">
+	<div class="recent-header">Останні записи</div>
+	
+	{% if recent_error %}
+		<div class="recent-empty">{{ recent_error }}</div>
+	{% else %}
+		<div class="recent-section">
+			<div class="recent-section__title recent-section__title--expense">Витрати</div>
+			{% if recent_expenses %}
+				<ul class="recent-list">
+					{% for entry in recent_expenses %}
+						<li class="recent-item">
+							<span class="recent-item__meta">{{ entry.date }} · {{ entry.category }}</span>
+							<span class="recent-item__amount recent-item__amount--expense">−{{ entry.amount }} ₴</span>
+						</li>
+				    {% endfor %}
+				</ul>
+			{% else %}
+				<div class="recent-empty">Поки немає записів</div>
+			{% endif %}
+		</div>
+
+		<div class="recent-section">
+			<div class="recent-section__title recent-section__title--income">Доходи</div>
+			{% if recent_income %}
+				<ul class="recent-list">
+					{% for entry in recent_income %}
+						<li class="recent-item">
+							<span class="recent-item__meta">{{ entry.date }} · {{ entry.category }}</span>
+							<span class="recent-item__amount recent-item__amount--income">+{{ entry.amount }} ₴</span>
+						</li>
+				    {% endfor %}
+				</ul>
+			{% else %}
+				<div class="recent-empty">Поки немає записів</div>
+			{% endif %}
+		</div>
+	{% endif %}
+  </div>
+	
   <a class="footer-link" href="{{ url_for('logout') }}">Вийти</a>
 
   <script>

@@ -50,6 +50,27 @@ def append_row(entry_type: str, row: dict):
     ws.append_row(values, value_input_option="USER_ENTERED")
 
 
+def get_recent_entries(ws_name: str, limit: int = 5):
+    """
+    Повертає останні `limit` записів з аркуша, найновіші першими.
+
+    Читає лише вже записані рядки (без запису), тому безпечно викликати
+    при кожному відкритті головної сторінки.
+    """
+    client = get_client()
+    sheet = client.open_by_key(SHEET_ID)
+    ws = sheet.worksheet(ws_name)
+
+    all_values = ws.get_all_values()
+    if len(all_values) <= 1:
+        return []
+    rows = all_values[1:][-limit:]
+    rows.reverse()
+
+    return [
+        {col: (row[i] if i < len(row) else "") for i, col in enumerate(COLUMN_ORDER)}
+        for row in rows]
+
 # Валідація (винесена в окремі функції — щоб тестувати без Flask/Sheets)
 _AMOUNT_PATTERN = re.compile(r"^\d+(\.\d+)?$")
 
@@ -128,10 +149,24 @@ def logout():
 @app.route("/", methods=["GET"])
 @login_required
 def index():
+    try:
+        recent_expenses = get_recent_entries(WORKSHEET_EXPENSE)
+        recent_income = get_recent_entries(WORKSHEET_INCOME)
+        recent_error = None
+    except Exception:  
+        # Сторінка все одно має відкритись, навіть якщо Google Sheets
+        # тимчасово недоступний — просто без блоку останніх записів.
+        recent_expenses = []
+        recent_income = []
+        recent_error = "Не вдалося завантажити останні записи"
+
     return render_template(
         "index.html",
         today=date.today().isoformat(),
         categories=CATEGORIES,
+        recent_expenses=recent_expenses,
+        recent_income=recent_income,
+        recent_error=recent_error,
     )
 
 

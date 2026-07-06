@@ -294,3 +294,18 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
   color: var(--ink-soft);
   text-decoration: none;
 }
+
+.recent-card { margin-top: 16px; border-top-color: var(--line); padding-top: 20px; padding-bottom: 16px; }
+.recent-header { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-soft); margin-bottom: 14px; }
+.recent-section + .recent-section { margin-top: 18px; }
+.recent-section__title { font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+.recent-section__title--expense { color: var(--expense); }
+.recent-section__title--income { color: var(--income); }
+.recent-list { list-style: none; margin: 0; padding: 0; }
+.recent-item { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.recent-item:last-child { border-bottom: none; }
+.recent-item__meta { color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-item__amount { font-family: "JetBrains Mono", "Courier New", monospace; font-weight: 600; white-space: nowrap; }
+.recent-item__amount--expense { color: var(--expense); }
+.recent-item__amount--income { color: var(--income); }
+.recent-empty { font-size: 13px; color: var(--ink-soft); }
