@@ -6,9 +6,11 @@ set -e
 echo "🔎 Запускаю тести перед push..."
 
 if [ -x ".venv/bin/python" ]; then
-    PYTHON=".venv/bin/python"
+     PYTHON=".venv/bin/python"
+elif [ -x ".venv/Scripts/python.exe" ]; then
+    PYTHON=".venv/Scripts/python.exe"
 else
-    PYTHON="python3"
+     PYTHON="python3"
 fi
 
 if ! $PYTHON -m pytest -q; then
