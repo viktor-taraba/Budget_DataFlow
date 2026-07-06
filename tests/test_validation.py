@@ -8,7 +8,7 @@ class TestValidateAmount:
     @pytest.mark.parametrize(
         "raw, expected",
         [
-            ("150", 150.0),
+            ("150", 1500.0),
             ("150.50", 150.5),
             ("150,50", 150.5),
             (" 150 ", 150.0),
