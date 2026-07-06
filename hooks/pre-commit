@@ -1,0 +1,24 @@
+#!/bin/sh
+# Запускається автоматично перед git commit (див. README про встановлення).
+# Якщо хоч один тест падає — commit скасовується.
+set -e
+
+echo "🔎 Запускаю тести перед commit..."
+
+if [ -x ".venv/bin/python" ]; then
+     PYTHON=".venv/bin/python"
+elif [ -x ".venv/Scripts/python.exe" ]; then
+    PYTHON=".venv/Scripts/python.exe"
+else
+     PYTHON="python3"
+fi
+
+if ! $PYTHON -m pytest -q; then
+    echo ""
+    echo "❌ Тести не пройшли. Commit скасовано."
+    echo "   Виправте помилки або запустіть 'pytest -v' для деталей."
+    exit 1
+fi
+
+echo "✅ Усі тести пройшли — commit дозволено."
+exit 0

@@ -9,13 +9,15 @@ import sys
 import pathlib
 import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from app import app as flask_app 
+import dotenv
+dotenv.load_dotenv = lambda *args, **kwargs: False
 
 os.environ.setdefault("FLASK_SECRET_KEY", "test-secret-key")
 os.environ.setdefault("APP_PASSWORD", "test-password")
 os.environ.setdefault("GOOGLE_SHEET_ID", "test-sheet-id")
 os.environ.setdefault("GOOGLE_CREDENTIALS_JSON", '{"type": "service_account"}')
 
+from app import app as flask_app 
 
 @pytest.fixture
 def client():
