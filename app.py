@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from datetime import date, datetime, timezone
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, flash
@@ -29,7 +30,6 @@ limiter = Limiter(get_remote_address, app=app, default_limits=[])
 # Google Sheets
 _gs_client = None
 
-
 def get_client():
     global _gs_client
     if _gs_client is None:
@@ -48,6 +48,45 @@ def append_row(entry_type: str, row: dict):
     ws = sheet.worksheet(ws_name)
     values = [row.get(col, "") for col in COLUMN_ORDER]
     ws.append_row(values, value_input_option="USER_ENTERED")
+
+
+# Валідація (винесена в окремі функції — щоб тестувати без Flask/Sheets)
+_AMOUNT_PATTERN = re.compile(r"^\d+(\.\d+)?$")
+
+def validate_amount(raw):
+    """
+    Парсить і валідує суму з форми.
+
+    Приймає кому як десятковий роздільник. Повертає float > 0, якщо рядок коректний, інакше None. 
+    Відхиляє науковий запис (1e10), від'ємні числа, кілька роздільників і сміття.
+    """
+    if raw is None:
+        return None
+    cleaned = raw.replace(",", ".").strip()
+    if not _AMOUNT_PATTERN.match(cleaned):
+        return None
+    value = float(cleaned)
+    return value if value > 0 else None
+
+
+def validate_date(raw, max_date=None):
+    """
+    Валідує дату у форматі YYYY-MM-DD.
+
+    max_date (за замовчуванням — сьогодні) визначає верхню межу: дати з майбутнього відхиляються. 
+    Повертає нормалізований ISO-рядок, якщо дата коректна, інакше None.
+    """
+    if not raw:
+        return None
+    try:
+        parsed = datetime.strptime(raw, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+    if max_date is None:
+        max_date = date.today()
+    if parsed > max_date:
+        return None
+    return parsed.isoformat()
 
 
 # Авторизація (єдиний користувач — просто пароль у сесії)
@@ -100,30 +139,21 @@ def index():
 @login_required
 def submit():
     entry_type = request.form.get("type")
-    amount_raw = request.form.get("amount", "").replace(",", ".").strip()
+    amount = validate_amount(request.form.get("amount"))
     category = request.form.get("category", "").strip()
-    entry_date = request.form.get("date") or date.today().isoformat()
+    entry_date_raw = request.form.get("date") or date.today().isoformat()
+    entry_date = validate_date(entry_date_raw)
     note = request.form.get("note", "").strip()
 
     error = None
-    try:
-        amount = float(amount_raw)
-        if amount <= 0:
-            raise ValueError
-    except ValueError:
+    if amount is None:
         error = "Введіть коректну суму більше нуля"
-
     if entry_type not in ("income", "expense"):
         error = "Оберіть тип запису"
-
     if not category:
         error = "Оберіть категорію"
-
-    try:
-        datetime.strptime(entry_date, "%Y-%m-%d")
-    except ValueError:
+    if entry_date is None:
         error = "Некоректна дата"
-
     if error:
         flash(error)
         return redirect(url_for("index"))
