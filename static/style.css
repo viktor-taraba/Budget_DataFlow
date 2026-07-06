@@ -19,7 +19,28 @@
   --shadow: 0 1px 2px rgba(32, 42, 46, 0.06), 0 8px 24px rgba(32, 42, 46, 0.08);
 }
 
+:root[data-theme="dark"] {
+  --bg: #1B1F1E;
+  --surface: #242928;
+  --ink: #ECEDEB;
+  --ink-soft: #97A19F;
+  --line: #363C3A;
+  --navy: #5B7FC7;
+  --navy-soft: rgba(91, 127, 199, 0.18);
+
+  --income: #57B98B;
+  --income-soft: rgba(87, 185, 139, 0.16);
+  --expense: #E0825E;
+  --expense-soft: rgba(224, 130, 94, 0.16);
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
 * { box-sizing: border-box; }
+
+html {
+  transition: background-color 0.2s ease;
+}
 
 html, body {
   margin: 0;
@@ -43,6 +64,36 @@ body {
   align-items: baseline;
   gap: 10px;
   margin-bottom: 20px;
+  width: 100%;
+  max-width: 420px;
+  justify-content: space-between;
+}
+
+.brand__left {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1.5px solid var(--line);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--ink-soft);
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+
+.theme-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .brand__mark {
