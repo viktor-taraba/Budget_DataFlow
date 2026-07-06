@@ -29,3 +29,4 @@
 - Push/Telegram-нагадування — якщо забуваєте вносити витрати, безкоштовний Telegram-бот може раз на день писати "не забудьте внести витрати" з посиланням на форму.
 - БД замість google sheets
 - тули для AI-агента на основі даних та агрегацій з БД
+- UserWarning: Using the in-memory storage for tracking rate limits as no storage was explicitly specified. This is not recommended for production use. See: https://flask-limiter.readthedocs.io#configuring-a-storage-backend for documentation about configuring the storage backend.
