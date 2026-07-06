@@ -4,14 +4,24 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>Бюджет</title>
+  <script>
+	(function () {
+	    const stored = localStorage.getItem('theme');
+	    const theme = stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+	    document.documentElement.setAttribute('data-theme', theme);
+	})();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
   <div class="brand">
-    <div class="brand__mark"></div>
-    <div class="brand__title">Бюджет</div>
+	<div class="brand__left">
+	<div class="brand__mark"></div>
+	<div class="brand__title">Бюджет</div>
+	</div>
+	<button type="button" class="theme-toggle" id="theme-toggle" aria-label="Перемкнути тему" title="Перемкнути світлу/темну тему">🌙</button>
   </div>
 
   {% with messages = get_flashed_messages(with_categories=true) %}
@@ -108,8 +118,8 @@
 		  }
 
 		  if (!e.target.checkValidity()) {
-			e.preventDefault();
-			e.target.reportValidity();
+		  e.preventDefault();
+		  e.target.reportValidity();
 		  return;
 		  }
 
@@ -119,13 +129,31 @@
 		  // Дозволяємо кому як десятковий роздільник
 		  // одразу скидаємо повідомлення про помилку, щойно людина почала правити поле (інакше воно "залипає" від попередньої невдалої спроби відправки)
 		  document.getElementById('amount').addEventListener('input', (e) => {
-			e.target.value = e.target.value.replace(/[^0-9.,]/g, '');
-			e.target.setCustomValidity('');
+		  e.target.value = e.target.value.replace(/[^0-9.,]/g, '');
+		  e.target.setCustomValidity('');
 		  });
 
 		  document.getElementById('date').addEventListener('input', (e) => {
-			e.target.setCustomValidity('');
+		  e.target.setCustomValidity('');
 		  });
+
+		  // Перемикач світла/темна тема
+		  const themeToggle = document.getElementById('theme-toggle');
+		  
+		  function updateToggleIcon() {
+			const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+			themeToggle.textContent = isDark ? '☀️' : '🌙';
+		  }
+		  
+		  themeToggle.addEventListener('click', () => {
+			  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+			  const next = isDark ? 'light' : 'dark';
+			  document.documentElement.setAttribute('data-theme', next);
+			  localStorage.setItem('theme', next);
+			  updateToggleIcon();
+		  });
+		  
+		  updateToggleIcon();
 	  </script>
 </body>
 </html>
