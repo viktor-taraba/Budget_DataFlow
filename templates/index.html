@@ -86,6 +86,18 @@
 		<span class="recent-item__meta">{{ entry.date }} · {{ entry.category }}</span>
 		<span class="recent-item__right">
 			<span class="recent-item__amount recent-item__amount--{{ kind }}">{{ sign }}{{ entry.amount }} ₴</span>
+			<button type="button" class="recent-edit__btn"
+					aria-label="Редагувати запис" title="Редагувати запис"
+					data-edit-row="{{ entry.row_number }}"
+					data-edit-type="{{ kind }}"
+					data-edit-date="{{ entry.date }}"
+					data-edit-category="{{ entry.category }}"
+					data-edit-amount="{{ entry.amount }}"
+					data-edit-note="{{ entry.note }}"
+					data-edit-fp-date="{{ entry.date }}"
+					data-edit-fp-category="{{ entry.category }}"
+					data-edit-fp-amount="{{ entry.amount }}"
+					data-edit-fp-added-at="{{ entry.added_at }}">📝</button>
 			<form class="recent-delete" method="post" action="{{ url_for('delete') }}">
 				<input type="hidden" name="type" value="{{ kind }}">
 				<input type="hidden" name="row_number" value="{{ entry.row_number }}">
@@ -135,6 +147,50 @@
   </div>
 	
   <a class="footer-link" href="{{ url_for('logout') }}">Вийти</a>
+
+  {# Модальне вікно редагування запису #}
+  <div class="edit-overlay" id="edit-overlay" hidden>
+	<div class="edit-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-title">
+	  <div class="edit-dialog__header">
+		<h2 id="edit-title" class="edit-dialog__title">Редагувати запис</h2>
+		<button type="button" class="edit-close" id="edit-close" aria-label="Закрити">✕</button>
+	  </div>
+	  <form id="edit-form" method="post" action="{{ url_for('edit') }}">
+		<input type="hidden" name="type" id="edit-type" value="">
+		<input type="hidden" name="row_number" id="edit-row-number" value="">
+		{% for col in fingerprint_columns %}
+		  <input type="hidden" name="fp_{{ col }}" id="edit-fp-{{ col }}" value="">
+		{% endfor %}
+
+		<div class="form-group">
+		  <label for="edit-date">Дата</label>
+		  <input type="date" id="edit-date" name="date" required>
+		</div>
+
+		<div class="form-group">
+		  <label for="edit-category">Категорія</label>
+		  <select id="edit-category" name="category" required>
+			<option value="">Виберіть категорію</option>
+		  </select>
+		</div>
+
+		<div class="form-group">
+		  <label for="edit-amount">Сума (грн)</label>
+		  <input type="text" id="edit-amount" name="amount" placeholder="0.00" required>
+		</div>
+
+		<div class="form-group">
+		  <label for="edit-note">Примітка (опціонально)</label>
+		  <input type="text" id="edit-note" name="note" placeholder="">
+		</div>
+
+		<div class="edit-actions">
+		  <button type="submit" class="btn btn-primary">Зберегти</button>
+		  <button type="button" class="btn btn-secondary" id="edit-cancel">Скасувати</button>
+		</div>
+	  </form>
+	</div>
+  </div>
 
   {#
     Вікно статистики. Дані підвантажуються через fetch('/stats') лише при
@@ -316,6 +372,103 @@
 	  </script>
 
   <script>
+	  // Редагування запису
+	  (function () {
+		  const categories = {
+			  expense: {{ categories.expense | tojson }},
+			  income: {{ categories.income | tojson }}
+		  };
+
+		  const editOverlay = document.getElementById('edit-overlay');
+		  const editForm = document.getElementById('edit-form');
+		  const editClose = document.getElementById('edit-close');
+		  const editCancel = document.getElementById('edit-cancel');
+		  const editCategorySelect = document.getElementById('edit-category');
+
+		  // Заповняємо select з категоріями залежно від типу
+		  function populateCategories(type) {
+			  editCategorySelect.innerHTML = '<option value="">Виберіть категорію</option>';
+			  (categories[type] || []).forEach(cat => {
+				  const option = document.createElement('option');
+				  option.value = cat;
+				  option.textContent = cat;
+				  editCategorySelect.appendChild(option);
+			  });
+		  }
+
+		  // Закриваємо модаль
+		  function closeEdit() {
+			  editOverlay.hidden = true;
+			  editForm.reset();
+		  }
+
+		  editClose.addEventListener('click', closeEdit);
+		  editCancel.addEventListener('click', closeEdit);
+		  editOverlay.addEventListener('click', (e) => {
+			  if (e.target === editOverlay) closeEdit();
+		  });
+
+		  // Обробка кліку на кнопку редагування
+		  document.addEventListener('click', (e) => {
+			  const editBtn = e.target.closest('.recent-edit__btn');
+			  if (!editBtn) return;
+
+			  const type = editBtn.dataset.editType;
+			  const rowNumber = editBtn.dataset.editRow;
+			  const date = editBtn.dataset.editDate;
+			  const category = editBtn.dataset.editCategory;
+			  const amount = editBtn.dataset.editAmount;
+			  const note = editBtn.dataset.editNote;
+
+			  document.getElementById('edit-type').value = type;
+			  document.getElementById('edit-row-number').value = rowNumber;
+			  document.getElementById('edit-date').value = date;
+			  document.getElementById('edit-amount').value = amount;
+			  document.getElementById('edit-note').value = note;
+
+			  // Заповнюємо категорії
+			  populateCategories(type);
+			  editCategorySelect.value = category;
+
+			  // Заповнюємо fingerprint
+			  const fpCols = ['date', 'category', 'amount', 'added_at'];
+			  fpCols.forEach(col => {
+				  const input = document.getElementById(`edit-fp-${col}`);
+				  if (input) {
+					  input.value = editBtn.getAttribute(`data-edit-fp-${col.replace(/_/g, '-')}`) || '';
+				  }
+			  });
+
+			  editOverlay.hidden = false;
+		  });
+
+		  // Обробка надсилання форми
+		  editForm.addEventListener('submit', (e) => {
+			  // Базова валідація
+			  const amount = document.getElementById('edit-amount').value;
+			  const category = document.getElementById('edit-category').value;
+			  const date = document.getElementById('edit-date').value;
+
+			  if (!amount || isNaN(amount) || parseFloat(amount) <= 0) {
+				  e.preventDefault();
+				  alert('Сума повинна бути додатним числом');
+				  return;
+			  }
+			  if (!category) {
+				  e.preventDefault();
+				  alert('Виберіть категорію');
+				  return;
+			  }
+			  if (!date) {
+				  e.preventDefault();
+				  alert('Виберіть дату');
+				  return;
+			  }
+		  });
+	  })();
+  </script>
+
+  <script>
 	  // Вікно статистики за період
 	  (function () {
 		  const overlay = document.getElementById('stats-overlay');
@@ -332,7 +485,7 @@
 		  let currentRange = null;
 
 		  function formatAmount(value) {
-			  return new Intl.NumberFormat('uk-UA', { maximumFractionDigits: 2 }).format(value);
+			  return new Intl.NumberFormat('uk-UA', { maximumFractionDigits: 0 }).format(value);
 		  }
 
 		  function formatDateFull(iso) {

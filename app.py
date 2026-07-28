@@ -203,6 +203,30 @@ def delete_row(ws_name: str, row_number: int, expected_fingerprint: list) -> boo
     return True
 
 
+def update_row(ws_name: str, row_number: int, expected_fingerprint: list, updates: dict) -> bool:
+    """
+    Оновлює рядок в аркуші, але лише якщо він досі містить ті самі дані.
+
+    updates: dict з ключами, які потрібно змінити (date, category, amount, note).
+    Системні поля (submitted_at, added_at, device_info) не змінюються.
+    """
+    if not any(expected_fingerprint):
+        return False
+
+    client = get_client()
+    sheet = client.open_by_key(SHEET_ID)
+    ws = sheet.worksheet(ws_name)
+
+    current = _row_to_entry(ws.row_values(row_number))
+    if row_fingerprint(current) != list(expected_fingerprint):
+        return False
+
+    updated_entry = {**current, **updates}
+    values = [updated_entry.get(col, "") for col in COLUMN_ORDER]
+    ws.update(f'A{row_number}:Z{row_number}', [values])
+    return True
+
+
 # Валідація (винесена в окремі функції — щоб тестувати без Flask/Sheets)
 _AMOUNT_PATTERN = re.compile(r"^\d+(\.\d+)?$")
 _ROW_NUMBER_PATTERN = re.compile(r"^\d+$")
@@ -386,6 +410,56 @@ def delete():
 
     if deleted:
         flash("Запис видалено", "success")
+    else:
+        flash("Запис уже змінився або був видалений — оновіть сторінку")
+    return redirect(url_for("index"))
+
+
+@app.route("/edit", methods=["POST"])
+@login_required
+def edit():
+    entry_type = request.form.get("type")
+    row_number = validate_row_number(request.form.get("row_number"))
+    expected_fingerprint = [request.form.get(f"fp_{col}", "") for col in FINGERPRINT_COLUMNS]
+
+    if entry_type not in ("income", "expense"):
+        flash("Некоректний тип запису")
+        return redirect(url_for("index"))
+    if row_number is None:
+        flash("Некоректний запис для редагування")
+        return redirect(url_for("index"))
+
+    amount = validate_amount(request.form.get("amount"))
+    category = request.form.get("category", "").strip()
+    entry_date_raw = request.form.get("date")
+    entry_date = validate_date(entry_date_raw)
+    note = request.form.get("note", "").strip()
+
+    if amount is None:
+        flash("Сума повинна бути числом")
+        return redirect(url_for("index"))
+    if not category:
+        flash("Виберіть категорію")
+        return redirect(url_for("index"))
+    if entry_date is None:
+        flash("Некоректна дата")
+        return redirect(url_for("index"))
+
+    updates = {
+        "date": entry_date,
+        "category": category,
+        "amount": str(amount),
+        "note": note,
+    }
+
+    try:
+        updated = update_row(worksheet_for(entry_type), row_number, expected_fingerprint, updates)
+    except Exception as exc:
+        flash(f"Помилка оновлення в таблиці: {exc}")
+        return redirect(url_for("index"))
+
+    if updated:
+        flash("Запис оновлено", "success")
     else:
         flash("Запис уже змінився або був видалений — оновіть сторінку")
     return redirect(url_for("index"))
