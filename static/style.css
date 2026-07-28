@@ -332,3 +332,196 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
 .recent-delete__btn:hover { background: var(--expense-soft); color: var(--expense); }
 .recent-delete__btn:active { transform: scale(0.92); }
 .recent-delete__btn:disabled { opacity: 0.4; cursor: default; }
+
+/* Кнопки в шапці (статистика + тема) */
+.brand__actions { display: flex; align-items: center; gap: 8px; }
+
+/* Вікно статистики */
+.stats-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 12, 12, 0.5);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px 16px;
+  overflow-y: auto;
+  z-index: 50;
+}
+.stats-overlay[hidden] { display: none; }
+
+.stats-dialog {
+  width: 100%;
+  max-width: 440px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  border-top: 4px solid var(--accent);
+  padding: 20px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+.stats-dialog__header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.stats-dialog__title { font-family: "Fraunces", Georgia, serif; font-size: 19px; font-weight: 600; margin: 0; }
+
+.stats-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+.stats-close:hover { background: var(--bg); color: var(--ink); }
+
+/* Фільтр періоду — один ряд над усім вмістом, який він скеровує */
+.stats-filters { margin-bottom: 18px; }
+.stats-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.stats-preset {
+  border: 1.5px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 7px 13px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+.stats-preset:hover { border-color: var(--accent); color: var(--accent); }
+.stats-preset.is-active { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+
+.stats-range { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.stats-range input[type="date"] { flex: 1 1 130px; padding: 9px 10px; font-size: 13px; }
+.stats-range__sep { color: var(--ink-soft); }
+.stats-apply {
+  border: none;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 14px;
+  cursor: pointer;
+}
+
+.stats-period-label { margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
+
+/* Під час перезавантаження вміст лишається видимим, лише притлумленим —
+   без "скелетону" і без стрибка висоти вікна. */
+.stats-body { transition: opacity 0.15s ease; }
+.stats-body.is-loading { opacity: 0.5; pointer-events: none; }
+
+.stats-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 22px; }
+.stats-kpi { background: var(--bg); border-radius: 12px; padding: 12px 8px; text-align: center; }
+.stats-kpi__label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-soft); margin-bottom: 6px; }
+.stats-kpi__value { font-family: "JetBrains Mono", "Courier New", monospace; font-size: 14px; font-weight: 600; color: var(--ink); word-break: break-word; }
+.stats-kpi__value--expense { color: var(--expense); }
+.stats-kpi__value--income { color: var(--income); }
+
+.stats-section { margin-bottom: 22px; }
+.stats-section__title { font-size: 12px; font-weight: 600; margin-bottom: 10px; color: var(--ink-soft); }
+.stats-section__title--expense { color: var(--expense); }
+.stats-section__title--income { color: var(--income); }
+.stats-empty { font-size: 13px; color: var(--ink-soft); padding: 8px 0; }
+
+/* Стовпчиковий графік: одна колонка на день, ціль наведення — вся колонка
+   (на всю висоту графіка), а не сам стовпчик, щоб навіть майже нульовий
+   день мав зручну для тапу область. */
+.bar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 128px;
+  padding-top: 22px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+}
+.bar-chart__slot {
+  flex: 1 1 auto;
+  min-width: 4px;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  position: relative;
+  cursor: pointer;
+  border-radius: 4px 4px 0 0;
+}
+.bar-chart__slot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.bar-chart__bar {
+  width: 100%;
+  border-radius: 4px 4px 0 0;
+  background: var(--ink-soft);
+  position: relative;
+  transition: height 0.2s ease, filter 0.15s ease;
+}
+.bar-chart__bar--expense { background: var(--expense); }
+.bar-chart__bar--income { background: var(--income); }
+.bar-chart__slot:hover .bar-chart__bar,
+.bar-chart__slot:focus-visible .bar-chart__bar { filter: brightness(1.15); }
+.bar-chart__peak {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translate(-50%, -4px);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.stats-table-toggle {
+  display: inline-block;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 0;
+  margin-bottom: 14px;
+}
+.stats-table-wrap { max-height: 220px; overflow-y: auto; margin-bottom: 22px; border: 1px solid var(--line); border-radius: 12px; }
+.stats-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.stats-table th, .stats-table td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--line); }
+.stats-table th:first-child, .stats-table td:first-child { text-align: left; color: var(--ink-soft); font-weight: 500; }
+.stats-table thead th { color: var(--ink-soft); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
+.stats-table tbody tr:last-child td { border-bottom: none; }
+.stats-table__expense { color: var(--expense); }
+.stats-table__income { color: var(--income); }
+
+/* Ранжований список категорій: довжина смужки — частка від найбільшої
+   категорії періоду (а не від загальної суми), як і на стовпчиковому графіку. */
+.cat-list { display: flex; flex-direction: column; gap: 12px; }
+.cat-row__top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 5px; font-size: 13px; }
+.cat-row__name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat-row__value { font-family: "JetBrains Mono", "Courier New", monospace; font-weight: 600; white-space: nowrap; color: var(--ink); }
+.cat-row__track { height: 8px; border-radius: 4px; background: var(--bg); overflow: hidden; }
+.cat-row__fill { height: 100%; border-radius: 4px; }
+.cat-row__fill--expense { background: var(--expense); }
+.cat-row__fill--income { background: var(--income); }
+
+.stats-error { margin-top: 4px; padding: 12px 16px; border-radius: 12px; font-size: 14px; background: var(--expense-soft); color: var(--expense); }
+
+.stats-tooltip {
+  position: fixed;
+  z-index: 60;
+  background: var(--ink);
+  color: var(--surface);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 8px;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: var(--shadow);
+}
+.stats-tooltip[hidden] { display: none; }
