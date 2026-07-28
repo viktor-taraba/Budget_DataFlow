@@ -17,19 +17,30 @@ os.environ.setdefault("APP_PASSWORD", "test-password")
 os.environ.setdefault("GOOGLE_SHEET_ID", "test-sheet-id")
 os.environ.setdefault("GOOGLE_CREDENTIALS_JSON", '{"type": "service_account"}')
 
-from app import app as flask_app 
+from app import app as flask_app, limiter
+
 
 @pytest.fixture
 def client():
     flask_app.config.update(TESTING=True)
     # Вимикаємо rate-limit у тестах: усі запити тестового клієнта йдуть
     # з одного "IP", інакше тести заважали б одне одному лічильником спроб.
-    flask_app.config["RATELIMIT_ENABLED"] = False
-    with flask_app.test_client() as test_client:
-        yield test_client
+    # Саме limiter.enabled, а не config["RATELIMIT_ENABLED"]: конфіг
+    # читається один раз під час init_app(), тобто ще при імпорті app.py,
+    # і виставляти його тут було б уже запізно.
+    limiter.enabled = False
+    limiter.reset()
+    try:
+        with flask_app.test_client() as test_client:
+            yield test_client
+    finally:
+        limiter.enabled = True
 
 
 @pytest.fixture
 def logged_in_client(client):
-    client.post("/login", data={"password": os.environ["APP_PASSWORD"]})
+    # Ставимо сесію напряму, а не через POST /login: тест логіну — окремо,
+    # а решті тестів не потрібно щоразу проходити форму входу.
+    with client.session_transaction() as sess:
+        sess["authed"] = True
     return client

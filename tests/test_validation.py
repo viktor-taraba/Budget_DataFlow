@@ -1,7 +1,7 @@
-"""Unit-тести валідації суми та дати."""
+"""Unit-тести валідації суми, дати та номера рядка."""
 from datetime import date
 import pytest
-from app import validate_amount, validate_date
+from app import validate_amount, validate_date, validate_row_number
 
 
 class TestValidateAmount:
@@ -67,3 +67,35 @@ class TestValidateDate:
         # навіть якщо вона в минулому відносно "сьогодні".
         assert validate_date("2025-06-01", max_date=date(2025, 5, 1)) is None
         assert validate_date("2025-04-01", max_date=date(2025, 5, 1)) == "2025-04-01"
+
+
+class TestValidateRowNumber:
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            ("2", 2),
+            ("10", 10),
+            (" 7 ", 7),
+            ("1000", 1000),
+            (5, 5),  # уже число, а не рядок з форми
+        ],
+    )
+    def test_accepts_valid_row_numbers(self, raw, expected):
+        assert validate_row_number(raw) == expected
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "1",  # рядок заголовків — видаляти не можна
+            "0",
+            "-5",
+            "2.5",
+            "",
+            "   ",
+            "abc",
+            "²",  # isdigit() == True, але int() падає — тому й regex, а не isdigit
+            None,  # поле відсутнє у формі
+        ],
+    )
+    def test_rejects_invalid_row_numbers(self, raw):
+        assert validate_row_number(raw) is None
