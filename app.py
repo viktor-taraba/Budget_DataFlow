@@ -1,9 +1,9 @@
 import os
 import json
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import wraps
-from flask import Flask, render_template, request, redirect, url_for, session, flash
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -58,6 +58,13 @@ def _row_to_entry(row) -> dict:
     return {col: (row[i] if i < len(row) else "") for i, col in enumerate(COLUMN_ORDER)}
 
 
+def _all_entries(all_values):
+    """Розкладає всі рядки даних аркуша (без рядка заголовків) у список записів."""
+    if len(all_values) <= 1:
+        return []
+    return [_row_to_entry(row) for row in all_values[1:]]
+
+
 def _rows_to_entries(all_values, limit: int):
     """
     Перетворює сирі значення аркуша (разом із рядком заголовків) на останні
@@ -67,20 +74,17 @@ def _rows_to_entries(all_values, limit: int):
     аркуші (заголовок — рядок 1, дані починаються з 2). Він потрібен, щоб
     видалити саме цей рядок через delete_rows().
     """
-    if len(all_values) <= 1:
+    entries = _all_entries(all_values)
+    if not entries:
         return []
 
-    data_rows = all_values[1:]
-    start = max(0, len(data_rows) - limit)
-
-    entries = []
-    for offset, row in enumerate(data_rows[start:], start=start):
-        entry = _row_to_entry(row)
+    start = max(0, len(entries) - limit)
+    sliced = entries[start:]
+    for offset, entry in enumerate(sliced, start=start):
         entry["row_number"] = offset + 2
-        entries.append(entry)
 
-    entries.reverse()
-    return entries
+    sliced.reverse()
+    return sliced
 
 
 def get_recent_entries(ws_name: str, limit: int = 5):
@@ -94,6 +98,73 @@ def get_recent_entries(ws_name: str, limit: int = 5):
     sheet = client.open_by_key(SHEET_ID)
     ws = sheet.worksheet(ws_name)
     return _rows_to_entries(ws.get_all_values(), limit)
+
+
+# Статистика за період
+# Довший період — це все одно один get_all_values() на аркуш, а не N запитів,
+# тому обмежуємо лише "розумну" максимальну довжину, а не кількість рядків.
+MAX_STATS_RANGE_DAYS = 366
+
+
+def _date_range(start_date: str, end_date: str) -> list:
+    """Список ISO-дат від start_date до end_date включно (для щоденного графіка з нулями)."""
+    start = datetime.strptime(start_date, "%Y-%m-%d").date()
+    end = datetime.strptime(end_date, "%Y-%m-%d").date()
+
+    days = []
+    current = start
+    while current <= end:
+        days.append(current.isoformat())
+        current += timedelta(days=1)
+    return days
+
+
+def _aggregate_stats(entries, start_date: str, end_date: str) -> dict:
+    """
+    Агрегує записи одного аркуша в межах [start_date, end_date] (включно):
+    загальна сума, суми по днях (з нулями для днів без записів — інакше
+    графік "стрибав" би по датах) і суми по категоріях, за спаданням.
+
+    Рядки з датою поза періодом чи сумою, яку не вдається розпарсити
+    (ручні правки в таблиці), тихо пропускаються — так само, як
+    get_recent_entries не падає через окремий зіпсований рядок.
+    """
+    daily_totals = {}
+    category_totals = {}
+    total = 0.0
+
+    for entry in entries:
+        entry_date = entry.get("date", "")
+        if not (start_date <= entry_date <= end_date):
+            continue
+        amount = validate_amount(entry.get("amount"))
+        if amount is None:
+            continue
+
+        total += amount
+        daily_totals[entry_date] = daily_totals.get(entry_date, 0.0) + amount
+        category = entry.get("category") or "Інше"
+        category_totals[category] = category_totals.get(category, 0.0) + amount
+
+    daily = [
+        {"date": d, "amount": round(daily_totals.get(d, 0.0), 2)}
+        for d in _date_range(start_date, end_date)
+    ]
+    categories = sorted(
+        ({"category": c, "amount": round(a, 2)} for c, a in category_totals.items()),
+        key=lambda item: item["amount"],
+        reverse=True,
+    )
+
+    return {"total": round(total, 2), "daily": daily, "categories": categories}
+
+
+def get_period_stats(ws_name: str, start_date: str, end_date: str) -> dict:
+    """Читає весь аркуш і агрегує його за _aggregate_stats для заданого періоду."""
+    client = get_client()
+    sheet = client.open_by_key(SHEET_ID)
+    ws = sheet.worksheet(ws_name)
+    return _aggregate_stats(_all_entries(ws.get_all_values()), start_date, end_date)
 
 
 # Видалення записів
@@ -318,6 +389,38 @@ def delete():
     else:
         flash("Запис уже змінився або був видалений — оновіть сторінку")
     return redirect(url_for("index"))
+
+
+@app.route("/stats", methods=["GET"])
+@login_required
+def stats():
+    today = date.today()
+    default_start = (today - timedelta(days=29)).isoformat()  # 30 днів включно з сьогодні
+
+    start_date = validate_date(request.args.get("start")) or default_start
+    end_date = validate_date(request.args.get("end")) or today.isoformat()
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
+    span_days = (date.fromisoformat(end_date) - date.fromisoformat(start_date)).days
+    if span_days > MAX_STATS_RANGE_DAYS:
+        start_date = (date.fromisoformat(end_date) - timedelta(days=MAX_STATS_RANGE_DAYS)).isoformat()
+
+    try:
+        expense = get_period_stats(WORKSHEET_EXPENSE, start_date, end_date)
+        income = get_period_stats(WORKSHEET_INCOME, start_date, end_date)
+    except Exception as exc:
+        return jsonify({"error": f"Не вдалося завантажити статистику: {exc}"}), 502
+
+    return jsonify(
+        {
+            "start": start_date,
+            "end": end_date,
+            "expense": expense,
+            "income": income,
+            "difference": round(income["total"] - expense["total"], 2),
+        }
+    )
 
 
 if __name__ == "__main__":

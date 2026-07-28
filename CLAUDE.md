@@ -31,9 +31,9 @@ Render build/start commands: `pip install uv && uv sync --frozen --no-dev` / `uv
 
 Everything lives in a handful of root-level files:
 
-- `app.py` — the whole application: env loading, Google Sheets client, validation helpers, auth, and all five routes (`/login`, `/logout`, `/`, `/submit`, `/delete`).
+- `app.py` — the whole application: env loading, Google Sheets client, validation helpers, auth, and all six routes (`/login`, `/logout`, `/`, `/submit`, `/delete`, `/stats`).
 - `config.py` — `CATEGORIES` (expense/income lists with emoji prefixes), `COLUMN_ORDER`, and the two worksheet names. Edit categories here, not in `app.py`.
-- `templates/index.html` — the form plus the "Останні записи" block. All client-side JS (category switching, pre-submit validation, theme toggle) is inline in this file. `templates/login.html` is the password gate.
+- `templates/index.html` — the form, the "Останні записи" block, and the "Статистика" modal. All client-side JS (category switching, pre-submit validation, theme toggle, delete confirmation, stats fetch/render) is inline in this file, in one `<script>` block per feature. `templates/login.html` is the password gate.
 - `static/style.css` — CSS custom properties themed by `data-theme` on `<html>`; theme is chosen by an inline script before paint to avoid a flash, persisted in `localStorage`.
 - `main.py` and `test.py` are scratch/leftover files, not part of the app.
 
@@ -42,6 +42,7 @@ Key structural points:
 - **Sheets write path**: `append_row(entry_type, row)` maps the row dict through `COLUMN_ORDER` into a positional list, so the sheet's column order must match `COLUMN_ORDER`. The gspread client is lazily created and cached in the module-level `_gs_client`.
 - **Sheets read path**: `get_recent_entries(ws_name, limit=5)` does a full `get_all_values()` on every `GET /` and delegates to the pure `_rows_to_entries(all_values, limit)`. Failures are caught in `index()` so the form still renders with `recent_error` set — never let a Sheets outage break the page.
 - **Sheets delete path**: sheet row numbers shift after every deletion, so a row number alone is not a safe identifier for a page that may have been open for hours. Each rendered entry carries `row_number` plus a fingerprint (`FINGERPRINT_COLUMNS`: date, category, amount, added_at) as hidden form fields; `delete_row` re-reads the row and deletes only if the fingerprint still matches, returning `False` otherwise so the user is told to reload. Preserve that read-then-compare guard when touching this code — dropping it silently deletes the wrong record.
+- **Stats path**: `GET /stats` is a JSON endpoint (not a page), fetched lazily from the modal's JS only when it's opened — it's a second full `get_all_values()` per worksheet (via `get_period_stats` → `_all_entries` → `_aggregate_stats`), so it deliberately isn't loaded on every `GET /` the way recent entries are. `_aggregate_stats` fills every date in the range with `0` (via `_date_range`) even where no entries exist, so the daily chart never has gaps. Malformed amounts (manual sheet edits) are skipped via `validate_amount`, same as elsewhere. The range is clamped to `MAX_STATS_RANGE_DAYS` (366) server-side regardless of what the client requests.
 - **Validation is deliberately Flask-free**: `validate_amount` and `validate_date` are plain functions taking raw strings, so `tests/test_validation.py` can test them without app context or network. Keep new validation logic in the same shape. Client-side validation in `index.html` mirrors these rules but is not a substitute for them.
 - **Auth** is a single shared password (`APP_PASSWORD`) checked against `session["authed"]` by the `@login_required` decorator. No user accounts.
 - **Rate limiting**: `flask-limiter` caps `POST /login` at 5/min; `ProxyFix(x_for=1)` is required for the limiter to see real client IPs behind Render's proxy. The 429 handler re-renders the login page with a flash. Storage is in-memory (known limitation, see ROADMAP).
@@ -56,7 +57,7 @@ Two test-harness details worth knowing:
 
 - The rate limiter is disabled via `limiter.enabled = False`, **not** `config["RATELIMIT_ENABLED"]` — flask-limiter reads that config key once during `init_app()`, which happens at `app.py` import time, so setting it from a fixture is too late. Getting this wrong is quiet: the suite passes until it accumulates more than 5 `POST /login` calls per minute, then unrelated tests start failing with 429.
 - `logged_in_client` sets `session["authed"]` directly through `session_transaction()` rather than posting the login form, so tests neither depend on the login flow nor consume the login rate limit.
-- Tests that need Sheets monkeypatch `app.get_client` with a fake client (see `tests/test_delete.py`) or replace `app.get_recent_entries`/`app.delete_row` outright. Nothing in the suite touches the network.
+- Tests that need Sheets monkeypatch `app.get_client` with a fake client (see `tests/test_delete.py`, `tests/test_stats.py`) or replace `app.get_recent_entries`/`app.delete_row`/`app.get_period_stats` outright. Nothing in the suite touches the network — never start the real dev server or hit the live Google Sheet to verify a change; the fake-client pattern is the verification path, and it also avoids ever needing the real `.env` secrets outside of actual local/Render runs.
 
 ## Docs to keep current
 
