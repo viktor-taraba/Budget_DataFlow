@@ -41,13 +41,46 @@ def get_client():
     return _gs_client
 
 
+def worksheet_for(entry_type: str) -> str:
+    return WORKSHEET_INCOME if entry_type == "income" else WORKSHEET_EXPENSE
+
+
 def append_row(entry_type: str, row: dict):
     client = get_client()
     sheet = client.open_by_key(SHEET_ID)
-    ws_name = WORKSHEET_INCOME if entry_type == "income" else WORKSHEET_EXPENSE
-    ws = sheet.worksheet(ws_name)
+    ws = sheet.worksheet(worksheet_for(entry_type))
     values = [row.get(col, "") for col in COLUMN_ORDER]
     ws.append_row(values, value_input_option="USER_ENTERED")
+
+
+def _row_to_entry(row) -> dict:
+    """Розкладає сирий рядок аркуша по назвах стовпців з COLUMN_ORDER."""
+    return {col: (row[i] if i < len(row) else "") for i, col in enumerate(COLUMN_ORDER)}
+
+
+def _rows_to_entries(all_values, limit: int):
+    """
+    Перетворює сирі значення аркуша (разом із рядком заголовків) на останні
+    `limit` записів, найновіші першими.
+
+    Крім значень стовпців, кожен запис містить `row_number` — номер рядка в
+    аркуші (заголовок — рядок 1, дані починаються з 2). Він потрібен, щоб
+    видалити саме цей рядок через delete_rows().
+    """
+    if len(all_values) <= 1:
+        return []
+
+    data_rows = all_values[1:]
+    start = max(0, len(data_rows) - limit)
+
+    entries = []
+    for offset, row in enumerate(data_rows[start:], start=start):
+        entry = _row_to_entry(row)
+        entry["row_number"] = offset + 2
+        entries.append(entry)
+
+    entries.reverse()
+    return entries
 
 
 def get_recent_entries(ws_name: str, limit: int = 5):
@@ -60,19 +93,48 @@ def get_recent_entries(ws_name: str, limit: int = 5):
     client = get_client()
     sheet = client.open_by_key(SHEET_ID)
     ws = sheet.worksheet(ws_name)
+    return _rows_to_entries(ws.get_all_values(), limit)
 
-    all_values = ws.get_all_values()
-    if len(all_values) <= 1:
-        return []
-    rows = all_values[1:][-limit:]
-    rows.reverse()
 
-    return [
-        {col: (row[i] if i < len(row) else "") for i, col in enumerate(COLUMN_ORDER)}
-        for row in rows]
+# Видалення записів
+# Набір стовпців, за якими звіряємо, що видаляємо саме той рядок, який
+# користувач бачив на сторінці. `added_at` ставить сервер, тому практично
+# унікальний; решта — щоб спрацювало і для рядків, дописаних у таблицю вручну.
+FINGERPRINT_COLUMNS = ("date", "category", "amount", "added_at")
+
+
+def row_fingerprint(entry: dict) -> list:
+    return [str(entry.get(col, "")) for col in FINGERPRINT_COLUMNS]
+
+
+def delete_row(ws_name: str, row_number: int, expected_fingerprint: list) -> bool:
+    """
+    Видаляє рядок з аркуша, але лише якщо він досі містить ті самі дані.
+
+    Сторінка могла бути відкрита давно, а таблиця за цей час — змінитися
+    (додали або видалили записи, і номери рядків зсунулись). Тому перед
+    видаленням перечитуємо рядок і звіряємо його з тим, що був на сторінці.
+    Якщо не збігається — не видаляємо нічого і повертаємо False, щоб не
+    втратити чужий запис.
+    """
+    if not any(expected_fingerprint):
+        return False
+
+    client = get_client()
+    sheet = client.open_by_key(SHEET_ID)
+    ws = sheet.worksheet(ws_name)
+
+    current = _row_to_entry(ws.row_values(row_number))
+    if row_fingerprint(current) != list(expected_fingerprint):
+        return False
+
+    ws.delete_rows(row_number)
+    return True
+
 
 # Валідація (винесена в окремі функції — щоб тестувати без Flask/Sheets)
 _AMOUNT_PATTERN = re.compile(r"^\d+(\.\d+)?$")
+_ROW_NUMBER_PATTERN = re.compile(r"^\d+$")
 
 def validate_amount(raw):
     """
@@ -108,6 +170,23 @@ def validate_date(raw, max_date=None):
     if parsed > max_date:
         return None
     return parsed.isoformat()
+
+
+def validate_row_number(raw):
+    """
+    Валідує номер рядка аркуша, отриманий з форми видалення.
+
+    Рядок 1 — це заголовки, тому коректними є лише цілі числа >= 2: так
+    підроблений або зіпсований номер не зможе видалити рядок заголовків.
+    Повертає int, якщо номер коректний, інакше None.
+    """
+    if raw is None:
+        return None
+    cleaned = str(raw).strip()
+    if not _ROW_NUMBER_PATTERN.match(cleaned):
+        return None
+    value = int(cleaned)
+    return value if value >= 2 else None
 
 
 # Авторизація (єдиний користувач — просто пароль у сесії)
@@ -167,6 +246,7 @@ def index():
         recent_expenses=recent_expenses,
         recent_income=recent_income,
         recent_error=recent_error,
+        fingerprint_columns=FINGERPRINT_COLUMNS,
     )
 
 
@@ -205,11 +285,38 @@ def submit():
 
     try:
         append_row(entry_type, row)
-    except Exception as exc: 
+    except Exception as exc:
         flash(f"Помилка запису в таблицю: {exc}")
         return redirect(url_for("index"))
 
     flash("Запис додано", "success")
+    return redirect(url_for("index"))
+
+
+@app.route("/delete", methods=["POST"])
+@login_required
+def delete():
+    entry_type = request.form.get("type")
+    row_number = validate_row_number(request.form.get("row_number"))
+    expected_fingerprint = [request.form.get(f"fp_{col}", "") for col in FINGERPRINT_COLUMNS]
+
+    if entry_type not in ("income", "expense"):
+        flash("Некоректний тип запису")
+        return redirect(url_for("index"))
+    if row_number is None:
+        flash("Некоректний запис для видалення")
+        return redirect(url_for("index"))
+
+    try:
+        deleted = delete_row(worksheet_for(entry_type), row_number, expected_fingerprint)
+    except Exception as exc:
+        flash(f"Помилка видалення з таблиці: {exc}")
+        return redirect(url_for("index"))
+
+    if deleted:
+        flash("Запис видалено", "success")
+    else:
+        flash("Запис уже змінився або був видалений — оновіть сторінку")
     return redirect(url_for("index"))
 
 

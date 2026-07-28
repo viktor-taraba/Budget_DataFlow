@@ -73,9 +73,33 @@
     </form>
   </div>
 
+  {#
+    Один запис у списку останніх. Форма видалення несе не лише номер рядка,
+    а й "відпечаток" запису (дата, категорія, сума, added_at) — сервер звіряє
+    його з таблицею, щоб застаріла сторінка не видалила чужий рядок.
+  #}
+  {% macro recent_item(entry, kind, sign, fp_columns) %}
+	<li class="recent-item">
+		<span class="recent-item__meta">{{ entry.date }} · {{ entry.category }}</span>
+		<span class="recent-item__right">
+			<span class="recent-item__amount recent-item__amount--{{ kind }}">{{ sign }}{{ entry.amount }} ₴</span>
+			<form class="recent-delete" method="post" action="{{ url_for('delete') }}">
+				<input type="hidden" name="type" value="{{ kind }}">
+				<input type="hidden" name="row_number" value="{{ entry.row_number }}">
+				{% for col in fp_columns %}
+					<input type="hidden" name="fp_{{ col }}" value="{{ entry[col] }}">
+				{% endfor %}
+				<button type="submit" class="recent-delete__btn"
+						aria-label="Видалити запис" title="Видалити запис"
+						data-confirm="Видалити запис «{{ entry.category }}» на {{ entry.amount }} ₴ від {{ entry.date }}?">✕</button>
+			</form>
+		</span>
+	</li>
+  {% endmacro %}
+
   <div class="card recent-card">
 	<div class="recent-header">Останні записи</div>
-	
+
 	{% if recent_error %}
 		<div class="recent-empty">{{ recent_error }}</div>
 	{% else %}
@@ -84,10 +108,7 @@
 			{% if recent_expenses %}
 				<ul class="recent-list">
 					{% for entry in recent_expenses %}
-						<li class="recent-item">
-							<span class="recent-item__meta">{{ entry.date }} · {{ entry.category }}</span>
-							<span class="recent-item__amount recent-item__amount--expense">−{{ entry.amount }} ₴</span>
-						</li>
+						{{ recent_item(entry, "expense", "−", fingerprint_columns) }}
 				    {% endfor %}
 				</ul>
 			{% else %}
@@ -100,10 +121,7 @@
 			{% if recent_income %}
 				<ul class="recent-list">
 					{% for entry in recent_income %}
-						<li class="recent-item">
-							<span class="recent-item__meta">{{ entry.date }} · {{ entry.category }}</span>
-							<span class="recent-item__amount recent-item__amount--income">+{{ entry.amount }} ₴</span>
-						</li>
+						{{ recent_item(entry, "income", "+", fingerprint_columns) }}
 				    {% endfor %}
 				</ul>
 			{% else %}
@@ -175,6 +193,20 @@
 
 		  document.getElementById('date').addEventListener('input', (e) => {
 		  e.target.setCustomValidity('');
+		  });
+
+		  // Видалення записів — незворотна дія, тому питаємо підтвердження.
+		  // Текст питання формує шаблон (data-confirm), щоб було видно, який саме запис зникне.
+		  document.querySelectorAll('.recent-delete').forEach((form) => {
+			  form.addEventListener('submit', (e) => {
+				  const btn = form.querySelector('.recent-delete__btn');
+				  if (!confirm(btn.dataset.confirm || 'Видалити запис?')) {
+					  e.preventDefault();
+					  return;
+				  }
+				  // Блокуємо кнопку, щоб подвійний тап не надіслав форму двічі.
+				  btn.disabled = true;
+			  });
 		  });
 
 		  // Перемикач світла/темна тема
