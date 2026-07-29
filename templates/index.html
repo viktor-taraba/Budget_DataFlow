@@ -124,7 +124,7 @@
 					data-edit-fp-category="{% if entry.split_count %}{{ entry.split_entries[0].category }}{% else %}{{ entry.category }}{% endif %}"
 					data-edit-fp-amount="{% if entry.split_count %}{{ entry.split_entries[0].amount }}{% else %}{{ entry.amount }}{% endif %}"
 					data-edit-fp-added-at="{{ entry.added_at }}"
-					{% if entry.split_count %}data-edit-split-id="{{ entry.split_id }}" data-edit-split-entries="{{ entry.split_entries | tojson | safe }}" data-edit-split-total="{{ entry.split_total_amount }}"{% endif %}>📝</button>
+					{% if entry.split_count %}data-edit-split-id="{{ entry.split_id }}" data-edit-split-count="{{ entry.split_count }}" data-edit-split-total="{{ entry.split_total_amount }}"{% for split_entry in entry.split_entries %} data-edit-split-{{ loop.index0 }}-category="{{ split_entry.category }}" data-edit-split-{{ loop.index0 }}-amount="{{ split_entry.amount }}"{% endfor %}{% endif %}>📝</button>
 			<form class="recent-delete" method="post" action="{{ url_for('delete') }}">
 				<input type="hidden" name="type" value="{{ kind }}">
 				<input type="hidden" name="row_number" value="{{ entry.row_number }}">
@@ -940,10 +940,21 @@
 			  const amount = editBtn.dataset.editAmount;
 			  const note = editBtn.dataset.editNote;
 			  const splitId = editBtn.dataset.editSplitId;
-			  const splitEntriesJson = editBtn.dataset.editSplitEntries;
-
 			  currentEditType = type;
-			  currentEditSplitEntries = splitEntriesJson ? JSON.parse(splitEntriesJson) : null;
+
+			  if (splitId) {
+				  const splitCount = parseInt(editBtn.dataset.editSplitCount, 10);
+				  currentEditSplitEntries = [];
+				  for (let i = 0; i < splitCount; i++) {
+					  const cat = editBtn.dataset[`editSplit${i}Category`];
+					  const amt = editBtn.dataset[`editSplit${i}Amount`];
+					  if (cat && amt) {
+						  currentEditSplitEntries.push({ category: cat, amount: amt });
+					  }
+				  }
+			  } else {
+				  currentEditSplitEntries = null;
+			  }
 
 			  document.getElementById('edit-type').value = type;
 			  document.getElementById('edit-row-number').value = rowNumber;
