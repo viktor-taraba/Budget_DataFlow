@@ -18,6 +18,8 @@ def make_row(day, category, amount, added_at=None):
         category,
         str(amount),
         "коментар",
+        "",  # split_id
+        "",  # split_info
         "2026-07-01T10:00:00",
         added_at if added_at is not None else f"2026-07-{day:02d}T10:00:00+00:00",
         "",
@@ -147,8 +149,8 @@ class TestDeleteRoute:
     def test_routes_income_to_income_worksheet(self, logged_in_client, monkeypatch):
         calls = {}
 
-        def fake_delete_row(ws_name, row_number, fingerprint, entry_type=None):
-            calls["args"] = (ws_name, row_number, fingerprint, entry_type)
+        def fake_delete_row(ws_name, row_number, fingerprint, entry_type=None, split_id=None):
+            calls["args"] = (ws_name, row_number, fingerprint, entry_type, split_id)
             return True
 
         monkeypatch.setattr(app_module, "delete_row", fake_delete_row)
@@ -157,6 +159,7 @@ class TestDeleteRoute:
         assert calls["args"][1] == 3
         assert calls["args"][2] == ["2026-07-02", "Кава", "20", "2026-07-02T10:00:00+00:00"]
         assert calls["args"][3] == "income"
+        assert calls["args"][4] is None
 
     def test_reports_stale_page(self, logged_in_client, sheet):
         response = logged_in_client.post(

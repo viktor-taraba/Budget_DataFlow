@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import uuid
 from datetime import date, datetime, timedelta, timezone
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
@@ -59,17 +60,53 @@ def worksheet_for(entry_type: str) -> str:
     return WORKSHEET_INCOME if entry_type == "income" else WORKSHEET_EXPENSE
 
 
-def append_row(entry_type: str, row: dict):
+def append_row(entry_type: str, row: dict, split_info=None):
+    """
+    Дописує один або кілька рядків до аркуша.
+
+    Якщо split_info передано (list of {category, amount} dicts):
+    - Генерує split_id (UUID)
+    - Для кожної категорії у split_info створює рядок з цією категорією/сумою
+    - Встановлює split_id для всіх рядків
+    - Встановлює split_info (JSON) для всіх рядків
+
+    Якщо split_info = None:
+    - Дописує один рядок як раніше (split_id та split_info залишаються пустими)
+    """
     client = get_client()
     sheet = client.open_by_key(SHEET_ID)
     ws = sheet.worksheet(worksheet_for(entry_type))
-    values = []
-    for col in COLUMN_ORDER:
-        val = row.get(col, "")
-        if col == "amount" and val and isinstance(val, (int, float)):
-            val = str(val).replace(".", ",")
-        values.append(val)
-    ws.append_row(values, value_input_option="USER_ENTERED")
+
+    if split_info:
+        split_id = str(uuid.uuid4())
+        total_amount = sum(item["amount"] for item in split_info)
+        split_info_json = json.dumps({
+            "total": round(total_amount, 2),
+            "categories": split_info
+        }, ensure_ascii=False)
+
+        for split_row in split_info:
+            row_data = {**row}
+            row_data["category"] = split_row["category"]
+            row_data["amount"] = split_row["amount"]
+            row_data["split_id"] = split_id
+            row_data["split_info"] = split_info_json
+
+            values = []
+            for col in COLUMN_ORDER:
+                val = row_data.get(col, "")
+                if col == "amount" and val and isinstance(val, (int, float)):
+                    val = str(val).replace(".", ",")
+                values.append(val)
+            ws.append_row(values, value_input_option="USER_ENTERED")
+    else:
+        values = []
+        for col in COLUMN_ORDER:
+            val = row.get(col, "")
+            if col == "amount" and val and isinstance(val, (int, float)):
+                val = str(val).replace(".", ",")
+            values.append(val)
+        ws.append_row(values, value_input_option="USER_ENTERED")
 
 
 def _row_to_entry(row) -> dict:
@@ -106,9 +143,67 @@ def _rows_to_entries(all_values, limit: int):
     return sliced
 
 
+def _group_split_entries(entries):
+    """
+    Групує записи за split_id.
+
+    Якщо split_id пусте, кожен запис залишається як є.
+    Якщо split_id присутній, всі рядки з однаковим split_id об'єднуються в один логічний запис:
+    - Категорії: "Продукти + Кава"
+    - Використовується дата/added_at/row_number першого рядка
+    - Встановлюється флаг split_count = N
+    - Зберігаються оригінальні рядки для операцій редагування/видалення
+
+    Повертає список групованих записів, найновіші першими.
+    """
+    if not entries:
+        return []
+
+    grouped = {}
+    result_order = []
+
+    for entry in entries:
+        split_id = entry.get("split_id", "").strip()
+
+        if not split_id:
+            grouped[f"single_{id(entry)}"] = entry
+            result_order.append(f"single_{id(entry)}")
+        else:
+            if split_id not in grouped:
+                grouped[split_id] = {
+                    "split_entries": [],
+                }
+                result_order.append(split_id)
+            grouped[split_id]["split_entries"].append(entry)
+
+    result = []
+    for key in result_order:
+        if key.startswith("single_"):
+            result.append(grouped[key])
+        else:
+            split_group = grouped[key]
+            split_entries = split_group["split_entries"]
+
+            first_entry = split_entries[0]
+            categories = " + ".join(e.get("category", "Інше") for e in split_entries)
+
+            grouped_entry = {
+                **first_entry,
+                "category": categories,
+                "split_count": len(split_entries),
+                "split_entries": split_entries,
+            }
+            result.append(grouped_entry)
+
+    return result
+
+
 def get_recent_entries(ws_name: str, limit: int = 5):
     """
     Повертає останні `limit` записів з аркуша, найновіші першими.
+
+    Групує рядки розбивки за split_id, так що одна логічна операція
+    розбивки розбивки відображається як один запис.
 
     Читає лише вже записані рядки (без запису), тому безпечно викликати
     при кожному відкритті головної сторінки.
@@ -116,7 +211,9 @@ def get_recent_entries(ws_name: str, limit: int = 5):
     client = get_client()
     sheet = client.open_by_key(SHEET_ID)
     ws = sheet.worksheet(ws_name)
-    return _rows_to_entries(ws.get_all_values(), limit)
+    entries = _rows_to_entries(ws.get_all_values(), limit * 2)
+    grouped = _group_split_entries(entries)
+    return grouped[:limit]
 
 
 # Статистика за період
@@ -197,16 +294,22 @@ def row_fingerprint(entry: dict) -> list:
     return [str(entry.get(col, "")) for col in FINGERPRINT_COLUMNS]
 
 
-def delete_row(ws_name: str, row_number: int, expected_fingerprint: list, entry_type: str = None) -> bool:
+def delete_row(ws_name: str, row_number: int, expected_fingerprint: list, entry_type: str = None, split_id: str = None) -> bool:
     """
-    Видаляє рядок з аркуша, але лише якщо він досі містить ті самі дані.
-    Перед видаленням архівує запис до аркуша DELETED з timestamp видалення.
+    Видаляє рядок(и) з аркуша, але лише якщо дані досі збігаються.
+
+    Якщо split_id передано:
+    - Знаходить всі рядки з цим split_id
+    - Видаляє всі (розбивка видаляється як одна операція)
+    - Архівує всі до листа DELETED
+
+    Якщо split_id не передано:
+    - Видаляє один рядок як раніше (назад сумісно)
 
     Сторінка могла бути відкрита давно, а таблиця за цей час — змінитися
     (додали або видалили записи, і номери рядків зсунулись). Тому перед
-    видаленням перечитуємо рядок і звіряємо його з тим, що був на сторінці.
-    Якщо не збігається — не видаляємо нічого і повертаємо False, щоб не
-    втратити чужий запис.
+    видаленням перечитуємо рядок(и) і звіряємо с тим, що був(и) на сторінці.
+    Якщо не збігається — не видаляємо нічого і повертаємо False.
     """
     if not any(expected_fingerprint):
         return False
@@ -215,26 +318,65 @@ def delete_row(ws_name: str, row_number: int, expected_fingerprint: list, entry_
     sheet = client.open_by_key(SHEET_ID)
     ws = sheet.worksheet(ws_name)
 
-    current = _row_to_entry(ws.row_values(row_number))
-    if row_fingerprint(current) != list(expected_fingerprint):
-        return False
+    if split_id:
+        all_values = ws.get_all_values()
+        all_entries = _all_entries(all_values)
 
-    # Архівуємо запис до листа DELETED перед видаленням
-    if entry_type:
-        deleted_ws = sheet.worksheet(WORKSHEET_DELETED)
-        deleted_entry = {**current}
-        deleted_entry["deleted_at"] = datetime.now(timezone.utc).isoformat()
-        deleted_entry["income_or_expense"] = "income" if entry_type == "income" else "expense"
-        values = [deleted_entry.get(col, "") for col in DELETED_COLUMN_ORDER]
-        deleted_ws.append_row(values, value_input_option="USER_ENTERED")
+        rows_to_delete = []
+        for offset, entry in enumerate(all_entries):
+            if entry.get("split_id", "").strip() == split_id:
+                rows_to_delete.append((offset + 2, entry))
 
-    ws.delete_rows(row_number)
-    return True
+        if not rows_to_delete:
+            return False
+
+        current = _row_to_entry(ws.row_values(row_number))
+        if row_fingerprint(current) != list(expected_fingerprint):
+            return False
+
+        if entry_type:
+            deleted_ws = sheet.worksheet(WORKSHEET_DELETED)
+            for _, entry in rows_to_delete:
+                deleted_entry = {**entry}
+                deleted_entry["deleted_at"] = datetime.now(timezone.utc).isoformat()
+                deleted_entry["income_or_expense"] = "income" if entry_type == "income" else "expense"
+                values = [deleted_entry.get(col, "") for col in DELETED_COLUMN_ORDER]
+                deleted_ws.append_row(values, value_input_option="USER_ENTERED")
+
+        for row_num, _ in sorted(rows_to_delete, key=lambda x: x[0], reverse=True):
+            ws.delete_rows(row_num)
+
+        return True
+    else:
+        current = _row_to_entry(ws.row_values(row_number))
+        if row_fingerprint(current) != list(expected_fingerprint):
+            return False
+
+        if entry_type:
+            deleted_ws = sheet.worksheet(WORKSHEET_DELETED)
+            deleted_entry = {**current}
+            deleted_entry["deleted_at"] = datetime.now(timezone.utc).isoformat()
+            deleted_entry["income_or_expense"] = "income" if entry_type == "income" else "expense"
+            values = [deleted_entry.get(col, "") for col in DELETED_COLUMN_ORDER]
+            deleted_ws.append_row(values, value_input_option="USER_ENTERED")
+
+        ws.delete_rows(row_number)
+        return True
 
 
-def update_row(ws_name: str, row_number: int, expected_fingerprint: list, updates: dict) -> bool:
+def update_row(ws_name: str, row_number: int, expected_fingerprint: list, updates: dict, split_id: str = None, split_breakdown=None) -> bool:
     """
-    Оновлює рядок в аркуші, але лише якщо він досі містить ті самі дані.
+    Оновлює рядок(и) в аркуші, але лише якщо дані досі збігаються.
+
+    Якщо split_id та split_breakdown передано:
+    - Знаходить всі рядки з цим split_id
+    - Оновлює кожен рядок з новою категорією/сумою з split_breakdown
+    - Оновлює split_info на всіх рядках
+    - date та note застосовуються до всіх
+    - updated_at встановлюється для всіх
+
+    Якщо split_id не передано:
+    - Оновлює один рядок як раніше (назад сумісно)
 
     updates: dict з ключами, які потрібно змінити (date, category, amount, note).
     Системні поля (submitted_at, added_at, device_info) не змінюються.
@@ -247,15 +389,51 @@ def update_row(ws_name: str, row_number: int, expected_fingerprint: list, update
     sheet = client.open_by_key(SHEET_ID)
     ws = sheet.worksheet(ws_name)
 
-    current = _row_to_entry(ws.row_values(row_number))
-    if row_fingerprint(current) != list(expected_fingerprint):
-        return False
+    if split_id:
+        all_values = ws.get_all_values()
+        all_entries = _all_entries(all_values)
 
-    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-    updated_entry = {**current, **updates}
-    values = [updated_entry.get(col, "") for col in COLUMN_ORDER]
-    ws.update(f'A{row_number}:Z{row_number}', [values])
-    return True
+        rows_to_update = []
+        for offset, entry in enumerate(all_entries):
+            if entry.get("split_id", "").strip() == split_id:
+                rows_to_update.append((offset + 2, entry))
+
+        if not rows_to_update:
+            return False
+
+        current = _row_to_entry(ws.row_values(row_number))
+        if row_fingerprint(current) != list(expected_fingerprint):
+            return False
+
+        if split_breakdown:
+            total_amount = sum(item["amount"] for item in split_breakdown)
+            split_info_json = json.dumps({
+                "total": round(total_amount, 2),
+                "categories": split_breakdown
+            }, ensure_ascii=False)
+            updates["split_info"] = split_info_json
+
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        for idx, (row_num, entry) in enumerate(rows_to_update):
+            updated_entry = {**entry, **updates}
+            if split_breakdown and idx < len(split_breakdown):
+                updated_entry["category"] = split_breakdown[idx]["category"]
+                updated_entry["amount"] = split_breakdown[idx]["amount"]
+            values = [updated_entry.get(col, "") for col in COLUMN_ORDER]
+            ws.update(f'A{row_num}:Z{row_num}', [values])
+
+        return True
+    else:
+        current = _row_to_entry(ws.row_values(row_number))
+        if row_fingerprint(current) != list(expected_fingerprint):
+            return False
+
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+        updated_entry = {**current, **updates}
+        values = [updated_entry.get(col, "") for col in COLUMN_ORDER]
+        ws.update(f'A{row_number}:Z{row_number}', [values])
+        return True
 
 
 # Валідація (винесена в окремі функції — щоб тестувати без Flask/Sheets)
@@ -313,6 +491,52 @@ def validate_row_number(raw):
         return None
     value = int(cleaned)
     return value if value >= 2 else None
+
+
+def validate_split(category_amount_pairs, total_amount):
+    """
+    Валідує розбивку суми на кілька категорій.
+
+    category_amount_pairs: list of (category, amount_str) tuples.
+    total_amount: float — загальна сума, яку потрібно розбити.
+
+    Правила:
+    - Мінімум 2 категорії (інакше це не розбивка, а звичайна операція)
+    - Кожна сума > 0 і повинна парсуватись через validate_amount()
+    - Сума всіх вказаних сум повинна бути < total_amount (місце для остатку)
+    - Остаток повинен бути >= 0.01 (щоб уникнути floating-point помилок)
+
+    Повертає кортеж (is_valid: bool, error_msg: str | None, split_rows: list | None).
+    Якщо valid, split_rows = [{"category": "Cat1", "amount": 100.0}, {...}]
+    з остатком у останньому елементі.
+    """
+    if not category_amount_pairs or len(category_amount_pairs) < 2:
+        return False, "Розбивка повинна містити щонайменше 2 категорії", None
+
+    if total_amount is None or total_amount <= 0:
+        return False, "Загальна сума повинна бути > 0", None
+
+    split_rows = []
+    sum_entered = 0.0
+
+    for category, amount_str in category_amount_pairs[:-1]:
+        validated = validate_amount(amount_str)
+        if validated is None:
+            return False, f"Невірна сума для категорії '{category}'", None
+        split_rows.append({"category": category, "amount": validated})
+        sum_entered += validated
+
+    if sum_entered >= total_amount:
+        return False, "Сума розбивки не повинна перевищувати загальну суму", None
+
+    remainder = round(total_amount - sum_entered, 2)
+    if remainder < 0.01:
+        return False, f"Остаток занадто малий ({remainder}). Перевірте суми.", None
+
+    last_category = category_amount_pairs[-1][0]
+    split_rows.append({"category": last_category, "amount": remainder})
+
+    return True, None, split_rows
 
 
 # Авторизація (єдиний користувач — просто пароль у сесії)
@@ -393,32 +617,68 @@ def submit():
         error = "Введіть коректну суму більше нуля"
     if entry_type not in ("income", "expense"):
         error = "Оберіть тип запису"
-    if not category:
-        error = "Оберіть категорію"
     if entry_date is None:
         error = "Некоректна дата"
     if error:
         flash(error)
         return redirect(url_for("index"))
 
-    row = {
-        "date": entry_date,
-        "category": category,
-        "amount": amount,
-        "note": note,
-        "submitted_at": request.form.get("submitted_at", ""),
-        "added_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "device_info": request.headers.get("User-Agent", "unknown"),
-    }
+    split_breakdown_json = request.form.get("split_breakdown")
 
-    try:
-        append_row(entry_type, row)
-    except Exception as exc:
-        flash(f"Помилка запису в таблицю: {exc}")
+    if split_breakdown_json and entry_type == "expense":
+        try:
+            split_breakdown = json.loads(split_breakdown_json)
+            is_valid, error_msg, split_rows = validate_split(split_breakdown, amount)
+            if not is_valid:
+                flash(error_msg or "Помилка валідації розбивки")
+                return redirect(url_for("index"))
+        except (json.JSONDecodeError, ValueError) as exc:
+            flash(f"Помилка формату розбивки: {exc}")
+            return redirect(url_for("index"))
+
+        row = {
+            "date": entry_date,
+            "category": "",
+            "amount": amount,
+            "note": note,
+            "submitted_at": request.form.get("submitted_at", ""),
+            "added_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "device_info": request.headers.get("User-Agent", "unknown"),
+        }
+
+        try:
+            append_row(entry_type, row, split_info=split_rows)
+        except Exception as exc:
+            flash(f"Помилка запису розбивки в таблицю: {exc}")
+            return redirect(url_for("index"))
+
+        flash("Розбита операція додана", "success")
         return redirect(url_for("index"))
+    else:
+        if not category:
+            error = "Оберіть категорію"
+        if error:
+            flash(error)
+            return redirect(url_for("index"))
 
-    flash("Запис додано", "success")
-    return redirect(url_for("index"))
+        row = {
+            "date": entry_date,
+            "category": category,
+            "amount": amount,
+            "note": note,
+            "submitted_at": request.form.get("submitted_at", ""),
+            "added_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "device_info": request.headers.get("User-Agent", "unknown"),
+        }
+
+        try:
+            append_row(entry_type, row)
+        except Exception as exc:
+            flash(f"Помилка запису в таблицю: {exc}")
+            return redirect(url_for("index"))
+
+        flash("Запис додано", "success")
+        return redirect(url_for("index"))
 
 
 @app.route("/delete", methods=["POST"])
@@ -427,6 +687,7 @@ def delete():
     entry_type = request.form.get("type")
     row_number = validate_row_number(request.form.get("row_number"))
     expected_fingerprint = [request.form.get(f"fp_{col}", "") for col in FINGERPRINT_COLUMNS]
+    split_id = request.form.get("split_id", "").strip() or None
 
     if entry_type not in ("income", "expense"):
         flash("Некоректний тип запису")
@@ -436,7 +697,7 @@ def delete():
         return redirect(url_for("index"))
 
     try:
-        deleted = delete_row(worksheet_for(entry_type), row_number, expected_fingerprint, entry_type)
+        deleted = delete_row(worksheet_for(entry_type), row_number, expected_fingerprint, entry_type, split_id=split_id)
     except Exception as exc:
         flash(f"Помилка видалення з таблиці: {exc}")
         return redirect(url_for("index"))
@@ -454,6 +715,8 @@ def edit():
     entry_type = request.form.get("type")
     row_number = validate_row_number(request.form.get("row_number"))
     expected_fingerprint = [request.form.get(f"fp_{col}", "") for col in FINGERPRINT_COLUMNS]
+    split_id = request.form.get("split_id", "").strip() or None
+    split_breakdown_json = request.form.get("split_breakdown")
 
     if entry_type not in ("income", "expense"):
         flash("Некоректний тип запису")
@@ -462,40 +725,72 @@ def edit():
         flash("Некоректний запис для редагування")
         return redirect(url_for("index"))
 
-    amount = validate_amount(request.form.get("amount"))
-    category = request.form.get("category", "").strip()
     entry_date_raw = request.form.get("date")
     entry_date = validate_date(entry_date_raw)
     note = request.form.get("note", "").strip()
 
-    if amount is None:
-        flash("Сума повинна бути числом")
-        return redirect(url_for("index"))
-    if not category:
-        flash("Виберіть категорію")
-        return redirect(url_for("index"))
     if entry_date is None:
         flash("Некоректна дата")
         return redirect(url_for("index"))
 
-    updates = {
-        "date": entry_date,
-        "category": category,
-        "amount": str(amount).replace(".", ","),
-        "note": note,
-    }
+    if split_id and split_breakdown_json:
+        try:
+            split_breakdown = json.loads(split_breakdown_json)
+            total_amount = sum(item["amount"] for item in split_breakdown)
+            is_valid, error_msg, _ = validate_split(split_breakdown, total_amount)
+            if not is_valid:
+                flash(error_msg or "Помилка валідації розбивки")
+                return redirect(url_for("index"))
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            flash(f"Помилка формату розбивки: {exc}")
+            return redirect(url_for("index"))
 
-    try:
-        updated = update_row(worksheet_for(entry_type), row_number, expected_fingerprint, updates)
-    except Exception as exc:
-        flash(f"Помилка оновлення в таблиці: {exc}")
+        updates = {
+            "date": entry_date,
+            "note": note,
+        }
+
+        try:
+            updated = update_row(worksheet_for(entry_type), row_number, expected_fingerprint, updates,
+                               split_id=split_id, split_breakdown=split_breakdown)
+        except Exception as exc:
+            flash(f"Помилка оновлення розбивки в таблиці: {exc}")
+            return redirect(url_for("index"))
+
+        if updated:
+            flash("Розбита операція оновлена", "success")
+        else:
+            flash("Запис уже змінився або був видалений — оновіть сторінку")
         return redirect(url_for("index"))
-
-    if updated:
-        flash("Запис оновлено", "success")
     else:
-        flash("Запис уже змінився або був видалений — оновіть сторінку")
-    return redirect(url_for("index"))
+        amount = validate_amount(request.form.get("amount"))
+        category = request.form.get("category", "").strip()
+
+        if amount is None:
+            flash("Сума повинна бути числом")
+            return redirect(url_for("index"))
+        if not category:
+            flash("Виберіть категорію")
+            return redirect(url_for("index"))
+
+        updates = {
+            "date": entry_date,
+            "category": category,
+            "amount": str(amount).replace(".", ","),
+            "note": note,
+        }
+
+        try:
+            updated = update_row(worksheet_for(entry_type), row_number, expected_fingerprint, updates)
+        except Exception as exc:
+            flash(f"Помилка оновлення в таблиці: {exc}")
+            return redirect(url_for("index"))
+
+        if updated:
+            flash("Запис оновлено", "success")
+        else:
+            flash("Запис уже змінився або був видалений — оновіть сторінку")
+        return redirect(url_for("index"))
 
 
 @app.route("/stats", methods=["GET"])
