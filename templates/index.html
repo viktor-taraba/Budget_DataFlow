@@ -111,20 +111,20 @@
 			{% endif %}
 		</span>
 		<span class="recent-item__right">
-			<span class="recent-item__amount recent-item__amount--{{ kind }}">{{ sign }}{{ entry.amount }} ₴</span>
+			<span class="recent-item__amount recent-item__amount--{{ kind }}">{{ sign }}{% if entry.split_count %}{{ entry.split_total_amount }}{% else %}{{ entry.amount }}{% endif %}</span>
 			<button type="button" class="recent-edit__btn"
 					aria-label="Редагувати запис" title="Редагувати запис"
 					data-edit-row="{{ entry.row_number }}"
 					data-edit-type="{{ kind }}"
 					data-edit-date="{{ entry.date }}"
-					data-edit-category="{{ entry.category }}"
-					data-edit-amount="{{ entry.amount }}"
+					data-edit-category="{% if entry.split_count %}{{ entry.split_entries[0].category }}{% else %}{{ entry.category }}{% endif %}"
+					data-edit-amount="{% if entry.split_count %}{{ entry.split_entries[0].amount }}{% else %}{{ entry.amount }}{% endif %}"
 					data-edit-note="{{ entry.note }}"
 					data-edit-fp-date="{{ entry.date }}"
-					data-edit-fp-category="{{ entry.category }}"
-					data-edit-fp-amount="{{ entry.amount }}"
+					data-edit-fp-category="{% if entry.split_count %}{{ entry.split_entries[0].category }}{% else %}{{ entry.category }}{% endif %}"
+					data-edit-fp-amount="{% if entry.split_count %}{{ entry.split_entries[0].amount }}{% else %}{{ entry.amount }}{% endif %}"
 					data-edit-fp-added-at="{{ entry.added_at }}"
-					{% if entry.split_count %}data-edit-split-id="{{ entry.split_id }}"{% endif %}>📝</button>
+					{% if entry.split_count %}data-edit-split-id="{{ entry.split_id }}" data-edit-split-count="{{ entry.split_count }}"{% endif %}>📝</button>
 			<form class="recent-delete" method="post" action="{{ url_for('delete') }}">
 				<input type="hidden" name="type" value="{{ kind }}">
 				<input type="hidden" name="row_number" value="{{ entry.row_number }}">
@@ -134,14 +134,14 @@
 				{% if entry.split_count %}<input type="hidden" name="split_id" value="{{ entry.split_id }}">{% endif %}
 				<button type="submit" class="recent-delete__btn"
 						aria-label="Видалити запис" title="Видалити запис"
-						data-confirm="Видалити запис «{{ entry.category }}» на {{ entry.amount }} ₴ від {{ entry.date }}?">✕</button>
+						data-confirm="Видалити запис {% if entry.split_count %}розбивки{% else %}«{{ entry.category }}»{% endif %} на {% if entry.split_count %}{{ entry.split_total_amount }}{% else %}{{ entry.amount }}{% endif %} від {{ entry.date }}?">✕</button>
 			</form>
 		</span>
 	</li>
 	{% if entry.split_count %}
 		<li class="recent-split-details" hidden>
 			{% for split_entry in entry.split_entries %}
-				<div class="split-detail-item">{{ split_entry.category }} · {{ split_entry.amount }} ₴</div>
+				<div class="split-detail-item">{{ split_entry.category }} · {{ split_entry.amount }}</div>
 			{% endfor %}
 		</li>
 	{% endif %}
@@ -788,6 +788,7 @@
 		  const editClose = document.getElementById('edit-close');
 		  const editCancel = document.getElementById('edit-cancel');
 		  const editCategorySelect = document.getElementById('edit-category');
+		  const editCategoryGroup = editCategorySelect.closest('.form-group');
 
 		  // Заповняємо select з категоріями залежно від типу
 		  function populateCategories(type) {
@@ -804,6 +805,7 @@
 		  function closeEdit() {
 			  editOverlay.hidden = true;
 			  editForm.reset();
+			  editCategoryGroup.style.display = '';
 		  }
 
 		  editClose.addEventListener('click', closeEdit);
@@ -823,6 +825,7 @@
 			  const category = editBtn.dataset.editCategory;
 			  const amount = editBtn.dataset.editAmount;
 			  const note = editBtn.dataset.editNote;
+			  const splitId = editBtn.dataset.editSplitId;
 
 			  document.getElementById('edit-type').value = type;
 			  document.getElementById('edit-row-number').value = rowNumber;
@@ -843,6 +846,16 @@
 				  }
 			  });
 
+			  // Для розбитих операцій: вимикаємо редагування категорії та суми
+			  if (splitId) {
+				  editCategorySelect.disabled = true;
+				  document.getElementById('edit-amount').disabled = true;
+				  editCategorySelect.value = category;
+			  } else {
+				  editCategorySelect.disabled = false;
+				  document.getElementById('edit-amount').disabled = false;
+			  }
+
 			  editOverlay.hidden = false;
 		  });
 
@@ -852,17 +865,21 @@
 			  const amount = document.getElementById('edit-amount').value;
 			  const category = document.getElementById('edit-category').value;
 			  const date = document.getElementById('edit-date').value;
+			  const isDisabled = editCategorySelect.disabled;
 
-			  if (!amount || isNaN(amount) || parseFloat(amount) <= 0) {
-				  e.preventDefault();
-				  alert('Сума повинна бути додатним числом');
-				  return;
+			  if (!isDisabled) {
+				  if (!amount || isNaN(amount) || parseFloat(amount) <= 0) {
+					  e.preventDefault();
+					  alert('Сума повинна бути додатним числом');
+					  return;
+				  }
+				  if (!category) {
+					  e.preventDefault();
+					  alert('Виберіть категорію');
+					  return;
+				  }
 			  }
-			  if (!category) {
-				  e.preventDefault();
-				  alert('Виберіть категорію');
-				  return;
-			  }
+
 			  if (!date) {
 				  e.preventDefault();
 				  alert('Виберіть дату');

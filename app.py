@@ -186,12 +186,17 @@ def _group_split_entries(entries):
 
             first_entry = split_entries[0]
             categories = " + ".join(e.get("category", "Інше") for e in split_entries)
+            total_amount = sum(
+                validate_amount(e.get("amount", "0")) or 0
+                for e in split_entries
+            )
 
             grouped_entry = {
                 **first_entry,
                 "category": categories,
                 "split_count": len(split_entries),
                 "split_entries": split_entries,
+                "split_total_amount": total_amount,
             }
             result.append(grouped_entry)
 
@@ -368,11 +373,11 @@ def update_row(ws_name: str, row_number: int, expected_fingerprint: list, update
     """
     Оновлює рядок(и) в аркуші, але лише якщо дані досі збігаються.
 
-    Якщо split_id та split_breakdown передано:
+    Якщо split_id передано:
     - Знаходить всі рядки з цим split_id
-    - Оновлює кожен рядок з новою категорією/сумою з split_breakdown
-    - Оновлює split_info на всіх рядках
-    - date та note застосовуються до всіх
+    - Якщо split_breakdown також передано: оновлює кожен рядок з новою категорією/сумою з split_breakdown
+    - Якщо split_breakdown не передано: оновлює всі рядки splits з переданими updates (date, note, etc)
+    - Оновлює split_info якщо split_breakdown передано
     - updated_at встановлюється для всіх
 
     Якщо split_id не передано:
@@ -740,7 +745,26 @@ def edit():
         flash("Некоректна дата")
         return redirect(url_for("index"))
 
-    if split_id and split_breakdown_json:
+    if split_id and not split_breakdown_json:
+        # Редагування split без нового breakdown: оновлюємо лише date та note для всіх рядків
+        updates = {
+            "date": entry_date,
+            "note": note,
+        }
+
+        try:
+            updated = update_row(worksheet_for(entry_type), row_number, expected_fingerprint, updates,
+                               split_id=split_id, split_breakdown=None)
+        except Exception as exc:
+            flash(f"Помилка оновлення розбивки в таблиці: {exc}")
+            return redirect(url_for("index"))
+
+        if updated:
+            flash("Розбита операція оновлена", "success")
+        else:
+            flash("Запис уже змінився або був видалений — оновіть сторінку")
+        return redirect(url_for("index"))
+    elif split_id and split_breakdown_json:
         try:
             split_breakdown = json.loads(split_breakdown_json)
             total_amount = sum(item["amount"] for item in split_breakdown)
