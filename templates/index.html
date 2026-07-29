@@ -124,7 +124,7 @@
 					data-edit-fp-category="{% if entry.split_count %}{{ entry.split_entries[0].category }}{% else %}{{ entry.category }}{% endif %}"
 					data-edit-fp-amount="{% if entry.split_count %}{{ entry.split_entries[0].amount }}{% else %}{{ entry.amount }}{% endif %}"
 					data-edit-fp-added-at="{{ entry.added_at }}"
-					{% if entry.split_count %}data-edit-split-id="{{ entry.split_id }}" data-edit-split-count="{{ entry.split_count }}"{% endif %}>📝</button>
+					{% if entry.split_count %}data-edit-split-id="{{ entry.split_id }}" data-edit-split-entries="{{ entry.split_entries | tojson | safe }}" data-edit-split-total="{{ entry.split_total_amount }}"{% endif %}>📝</button>
 			<form class="recent-delete" method="post" action="{{ url_for('delete') }}">
 				<input type="hidden" name="type" value="{{ kind }}">
 				<input type="hidden" name="row_number" value="{{ entry.row_number }}">
@@ -218,6 +218,8 @@
 	  <form id="edit-form" method="post" action="{{ url_for('edit') }}">
 		<input type="hidden" name="type" id="edit-type" value="">
 		<input type="hidden" name="row_number" id="edit-row-number" value="">
+		<input type="hidden" name="split_id" id="edit-split-id" value="">
+		<input type="hidden" name="split_breakdown" id="edit-split-breakdown">
 		{% for col in fingerprint_columns %}
 		  <input type="hidden" name="fp_{{ col }}" id="edit-fp-{{ col }}" value="">
 		{% endfor %}
@@ -227,16 +229,22 @@
 		  <input type="date" id="edit-date" name="date" required>
 		</div>
 
-		<div class="form-group">
+		<div class="form-group" id="edit-category-group">
 		  <label for="edit-category">Категорія</label>
 		  <select id="edit-category" name="category" required>
 			<option value="">Виберіть категорію</option>
 		  </select>
 		</div>
 
-		<div class="form-group">
+		<div class="form-group" id="edit-amount-group">
 		  <label for="edit-amount">Сума (грн)</label>
 		  <input type="text" id="edit-amount" name="amount" placeholder="0.00" required>
+		</div>
+
+		<div id="edit-split-form" hidden>
+		  <div class="split-note">Остання сума вираховується автоматично</div>
+		  <div id="edit-split-pairs" class="split-pairs"></div>
+		  <button type="button" id="edit-split-add-btn" class="split-add-btn">+ Додати категорію</button>
 		</div>
 
 		<div class="form-group">
@@ -788,9 +796,15 @@
 		  const editClose = document.getElementById('edit-close');
 		  const editCancel = document.getElementById('edit-cancel');
 		  const editCategorySelect = document.getElementById('edit-category');
-		  const editCategoryGroup = editCategorySelect.closest('.form-group');
+		  const editCategoryGroup = document.getElementById('edit-category-group');
+		  const editAmountGroup = document.getElementById('edit-amount-group');
+		  const editSplitForm = document.getElementById('edit-split-form');
+		  const editSplitPairs = document.getElementById('edit-split-pairs');
+		  const editSplitAddBtn = document.getElementById('edit-split-add-btn');
+		  const editAmount = document.getElementById('edit-amount');
+		  let currentEditSplitEntries = null;
+		  let currentEditType = null;
 
-		  // Заповняємо select з категоріями залежно від типу
 		  function populateCategories(type) {
 			  editCategorySelect.innerHTML = '<option value="">Виберіть категорію</option>';
 			  (categories[type] || []).forEach(cat => {
@@ -801,11 +815,112 @@
 			  });
 		  }
 
-		  // Закриваємо модаль
+		  function recalculateEditRemainder() {
+			  const lastAmount = document.querySelector('#edit-split-pairs .split-pair:last-child .split-amount');
+			  if (!lastAmount) return;
+
+			  const total = parseFloat(editAmount.value.replace(',', '.'));
+			  if (isNaN(total)) {
+				lastAmount.value = '0';
+				return;
+			  }
+
+			  let sum = 0;
+			  document.querySelectorAll('#edit-split-pairs .split-pair:not(:last-child) .split-amount').forEach(inp => {
+				const val = parseFloat(inp.value.replace(',', '.'));
+				if (!isNaN(val)) sum += val;
+			  });
+
+			  const remainder = total - sum;
+			  lastAmount.value = isNaN(remainder) ? '0' : remainder.toFixed(2);
+		}
+
+		  function renderEditSplitPairs() {
+			  editSplitPairs.innerHTML = '';
+			  const pairCount = currentEditSplitEntries ? currentEditSplitEntries.length : 2;
+
+			  for (let i = 0; i < pairCount; i++) {
+				const pair = document.createElement('div');
+				pair.className = 'split-pair';
+
+				const catLabel = document.createElement('label');
+				catLabel.textContent = 'Категорія';
+				const catSelect = document.createElement('select');
+				catSelect.className = 'split-category';
+				(categories[currentEditType] || []).forEach(cat => {
+				  const opt = document.createElement('option');
+				  opt.value = cat;
+				  opt.textContent = cat;
+				  catSelect.appendChild(opt);
+				});
+				if (currentEditSplitEntries && i < currentEditSplitEntries.length) {
+				  catSelect.value = currentEditSplitEntries[i].category;
+				}
+
+				const amountLabel = document.createElement('label');
+				const amountInput = document.createElement('input');
+				amountInput.type = 'text';
+				amountInput.className = 'split-amount';
+				amountInput.placeholder = '0';
+				amountInput.inputMode = 'decimal';
+
+				if (i === pairCount - 1) {
+				  amountLabel.textContent = 'Залишок (автоматично)';
+				  amountInput.disabled = true;
+				  amountInput.className += ' split-amount--readonly';
+				} else {
+				  amountLabel.textContent = 'Сума';
+				  if (currentEditSplitEntries && i < currentEditSplitEntries.length) {
+					amountInput.value = currentEditSplitEntries[i].amount;
+				  }
+				  amountInput.addEventListener('input', (e) => {
+					e.target.value = e.target.value.replace(/[^0-9.,]/g, '');
+					recalculateEditRemainder();
+				  });
+				}
+
+				const removeBtn = document.createElement('button');
+				removeBtn.type = 'button';
+				removeBtn.className = 'split-remove-btn';
+				removeBtn.textContent = '✕';
+				removeBtn.addEventListener('click', (e) => {
+				  e.preventDefault();
+				  pair.remove();
+				  renderEditSplitPairs();
+				  recalculateEditRemainder();
+				});
+
+				pair.append(catLabel, catSelect, amountLabel, amountInput);
+				if (i < pairCount - 1) {
+				  pair.appendChild(removeBtn);
+				}
+				editSplitPairs.appendChild(pair);
+			  }
+
+			  recalculateEditRemainder();
+		  }
+
 		  function closeEdit() {
 			  editOverlay.hidden = true;
 			  editForm.reset();
+			  editSplitForm.hidden = true;
 			  editCategoryGroup.style.display = '';
+			  editAmountGroup.style.display = '';
+			  currentEditSplitEntries = null;
+		  }
+
+		  function generateEditSplitBreakdown() {
+			  const pairs = document.querySelectorAll('#edit-split-pairs .split-pair');
+			  const breakdown = [];
+			  pairs.forEach((pair, idx) => {
+				const cat = pair.querySelector('.split-category').value;
+				const amountStr = pair.querySelector('.split-amount').value;
+				const amount = parseFloat(amountStr.replace(',', '.'));
+				if (cat && !isNaN(amount) && amount > 0) {
+				  breakdown.push({ category: cat, amount: parseFloat(amount.toFixed(2)) });
+				}
+			  });
+			  return breakdown;
 		  }
 
 		  editClose.addEventListener('click', closeEdit);
@@ -814,7 +929,6 @@
 			  if (e.target === editOverlay) closeEdit();
 		  });
 
-		  // Обробка кліку на кнопку редагування
 		  document.addEventListener('click', (e) => {
 			  const editBtn = e.target.closest('.recent-edit__btn');
 			  if (!editBtn) return;
@@ -826,18 +940,34 @@
 			  const amount = editBtn.dataset.editAmount;
 			  const note = editBtn.dataset.editNote;
 			  const splitId = editBtn.dataset.editSplitId;
+			  const splitEntriesJson = editBtn.dataset.editSplitEntries;
+
+			  currentEditType = type;
+			  currentEditSplitEntries = splitEntriesJson ? JSON.parse(splitEntriesJson) : null;
 
 			  document.getElementById('edit-type').value = type;
 			  document.getElementById('edit-row-number').value = rowNumber;
+			  document.getElementById('edit-split-id').value = splitId || '';
 			  document.getElementById('edit-date').value = date;
 			  document.getElementById('edit-amount').value = amount;
 			  document.getElementById('edit-note').value = note;
 
-			  // Заповнюємо категорії
 			  populateCategories(type);
-			  editCategorySelect.value = category;
 
-			  // Заповнюємо fingerprint
+			  if (splitId && currentEditSplitEntries) {
+				  editCategoryGroup.style.display = 'none';
+				  editAmountGroup.style.display = 'none';
+				  editSplitForm.hidden = false;
+				  renderEditSplitPairs();
+			  } else {
+				  editCategoryGroup.style.display = '';
+				  editAmountGroup.style.display = '';
+				  editSplitForm.hidden = true;
+				  editCategorySelect.value = category;
+				  editCategorySelect.disabled = false;
+				  document.getElementById('edit-amount').disabled = false;
+			  }
+
 			  const fpCols = ['date', 'category', 'amount', 'added_at'];
 			  fpCols.forEach(col => {
 				  const input = document.getElementById(`edit-fp-${col}`);
@@ -846,28 +976,37 @@
 				  }
 			  });
 
-			  // Для розбитих операцій: вимикаємо редагування категорії та суми
-			  if (splitId) {
-				  editCategorySelect.disabled = true;
-				  document.getElementById('edit-amount').disabled = true;
-				  editCategorySelect.value = category;
-			  } else {
-				  editCategorySelect.disabled = false;
-				  document.getElementById('edit-amount').disabled = false;
-			  }
-
 			  editOverlay.hidden = false;
 		  });
 
-		  // Обробка надсилання форми
-		  editForm.addEventListener('submit', (e) => {
-			  // Базова валідація
-			  const amount = document.getElementById('edit-amount').value;
-			  const category = document.getElementById('edit-category').value;
-			  const date = document.getElementById('edit-date').value;
-			  const isDisabled = editCategorySelect.disabled;
+		  editSplitAddBtn.addEventListener('click', (e) => {
+			  e.preventDefault();
+			  renderEditSplitPairs();
+		  });
 
-			  if (!isDisabled) {
+		  editAmount.addEventListener('input', () => {
+			  if (!editSplitForm.hidden) {
+				recalculateEditRemainder();
+			  }
+		  });
+
+		  editForm.addEventListener('submit', (e) => {
+			  const date = document.getElementById('edit-date').value;
+			  const isSplit = !editSplitForm.hidden;
+
+			  if (isSplit) {
+				  const pairs = document.querySelectorAll('#edit-split-pairs .split-pair');
+				  if (pairs.length < 2) {
+					  e.preventDefault();
+					  alert('Розбивка має містити мінімум 2 категорії');
+					  return;
+				  }
+				  const breakdown = generateEditSplitBreakdown();
+				  document.getElementById('edit-split-breakdown').value = JSON.stringify(breakdown);
+			  } else {
+				  const amount = editAmount.value;
+				  const category = editCategorySelect.value;
+
 				  if (!amount || isNaN(amount) || parseFloat(amount) <= 0) {
 					  e.preventDefault();
 					  alert('Сума повинна бути додатним числом');
