@@ -919,8 +919,9 @@
 			  pairs.forEach((pair, idx) => {
 				const cat = pair.querySelector('.split-category').value;
 				const amountStr = pair.querySelector('.split-amount').value;
+				if (!cat || !amountStr) return;
 				const amount = parseFloat(amountStr.replace(',', '.'));
-				if (cat && !isNaN(amount) && amount > 0) {
+				if (!isNaN(amount) && amount > 0) {
 				  breakdown.push({ category: cat, amount: parseFloat(amount.toFixed(2)) });
 				}
 			  });
@@ -963,6 +964,11 @@
 							  }
 						  }
 					  });
+				  }
+				  if (currentEditSplitEntries.length === 0) {
+					  alert('Помилка: не вдалося завантажити деталі розбивки. Спробуйте оновити сторінку.');
+					  editOverlay.hidden = false;
+					  return;
 				  }
 			  } else {
 				  currentEditSplitEntries = null;
