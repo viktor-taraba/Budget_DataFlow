@@ -124,7 +124,7 @@
 					data-edit-fp-category="{% if entry.split_count %}{{ entry.split_entries[0].category }}{% else %}{{ entry.category }}{% endif %}"
 					data-edit-fp-amount="{% if entry.split_count %}{{ entry.split_entries[0].amount }}{% else %}{{ entry.amount }}{% endif %}"
 					data-edit-fp-added-at="{{ entry.added_at }}"
-					{% if entry.split_count %}data-edit-split-id="{{ entry.split_id }}" data-edit-split-count="{{ entry.split_count }}" data-edit-split-total="{{ entry.split_total_amount }}"{% for split_entry in entry.split_entries %} data-edit-split-{{ loop.index0 }}-category="{{ split_entry.category }}" data-edit-split-{{ loop.index0 }}-amount="{{ split_entry.amount }}"{% endfor %}{% endif %}>📝</button>
+					{% if entry.split_count %}data-edit-split-id="{{ entry.split_id }}" data-edit-split-total="{{ entry.split_total_amount }}"{% endif %}>📝</button>
 			<form class="recent-delete" method="post" action="{{ url_for('delete') }}">
 				<input type="hidden" name="type" value="{{ kind }}">
 				<input type="hidden" name="row_number" value="{{ entry.row_number }}">
@@ -943,14 +943,22 @@
 			  currentEditType = type;
 
 			  if (splitId) {
-				  const splitCount = parseInt(editBtn.dataset.editSplitCount, 10);
+				  // Extract split entries from the split-details section on the page
 				  currentEditSplitEntries = [];
-				  for (let i = 0; i < splitCount; i++) {
-					  const cat = editBtn.dataset[`editSplit${i}Category`];
-					  const amt = editBtn.dataset[`editSplit${i}Amount`];
-					  if (cat && amt) {
-						  currentEditSplitEntries.push({ category: cat, amount: amt });
-					  }
+				  const recentItem = editBtn.closest('.recent-item');
+				  const splitDetails = recentItem ? recentItem.nextElementSibling : null;
+				  if (splitDetails && splitDetails.classList.contains('recent-split-details')) {
+					  splitDetails.querySelectorAll('.split-detail-item').forEach(item => {
+						  const text = item.textContent.trim();
+						  const parts = text.split(' · ');
+						  if (parts.length === 2) {
+							  const category = parts[0].trim();
+							  const amount = parts[1].trim();
+							  if (category && amount) {
+								  currentEditSplitEntries.push({ category, amount });
+							  }
+						  }
+					  });
 				  }
 			  } else {
 				  currentEditSplitEntries = null;
