@@ -2,7 +2,7 @@ WORKSHEET_EXPENSE = "Витрати"
 
 WORKSHEET_INCOME = "Доходи"
 
-WORKSHEET_DELETED = "DELETED"
+WORKSHEET_DELETED = "Deleted"
 
 COLUMN_ORDER = ["date", "category", "amount", "note", "submitted_at", "added_at", "updated_at", "device_info"]
 
