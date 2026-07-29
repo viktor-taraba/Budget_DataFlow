@@ -12,6 +12,10 @@ import gspread
 from google.oauth2.service_account import Credentials
 from config import COLUMN_ORDER, DELETED_COLUMN_ORDER, WORKSHEET_EXPENSE, WORKSHEET_INCOME, WORKSHEET_DELETED
 
+# Кеширование частоти категорій (раз на день)
+_category_frequency_cache = None
+_category_frequency_date = None
+
 load_dotenv()
 
 app = Flask(__name__)
@@ -350,11 +354,13 @@ def logout():
 @app.route("/", methods=["GET"])
 @login_required
 def index():
+    maybe_update_category_order()
+
     try:
         recent_expenses = get_recent_entries(WORKSHEET_EXPENSE)
         recent_income = get_recent_entries(WORKSHEET_INCOME)
         recent_error = None
-    except Exception:  
+    except Exception:
         # Сторінка все одно має відкритись, навіть якщо Google Sheets
         # тимчасово недоступний — просто без блоку останніх записів.
         recent_expenses = []
@@ -533,6 +539,62 @@ def get_categories_endpoint():
 def save_categories():
     with open("categories.json", "w", encoding="utf-8") as f:
         json.dump(CATEGORIES, f, ensure_ascii=False, indent=2)
+
+
+def count_category_frequency():
+    """
+    Рахує частоту використання кожної категорії у обох таблицях (без обмеження по періоду).
+    Повертає dict {type: {category: count, ...}}.
+    """
+    try:
+        client = get_client()
+        sheet = client.open_by_key(SHEET_ID)
+
+        frequency = {"expense": {}, "income": {}}
+
+        for entry_type, ws_name in [("expense", WORKSHEET_EXPENSE), ("income", WORKSHEET_INCOME)]:
+            ws = sheet.worksheet(ws_name)
+            entries = _all_entries(ws.get_all_values())
+
+            for entry in entries:
+                category = entry.get("category", "").strip()
+                if category:
+                    frequency[entry_type][category] = frequency[entry_type].get(category, 0) + 1
+
+        return frequency
+    except Exception:
+        return {"expense": {}, "income": {}}
+
+
+def maybe_update_category_order():
+    """
+    Щоденно оновлює порядок категорій залежно від частоти використання.
+    Якщо кеш відсутній або дата змінилась, перераховує частоту.
+    """
+    global CATEGORIES, _category_frequency_cache, _category_frequency_date
+
+    today = date.today()
+
+    if _category_frequency_date != today:
+        frequency = count_category_frequency()
+        _category_frequency_cache = frequency
+        _category_frequency_date = today
+    else:
+        frequency = _category_frequency_cache or count_category_frequency()
+
+    for entry_type in ["expense", "income"]:
+        if entry_type not in CATEGORIES:
+            continue
+
+        current_cats = CATEGORIES[entry_type]
+        cat_counts = frequency.get(entry_type, {})
+
+        def sort_key(cat):
+            count = cat_counts.get(cat, 0)
+            current_index = current_cats.index(cat) if cat in current_cats else float('inf')
+            return (-count, current_index)
+
+        CATEGORIES[entry_type] = sorted(current_cats, key=sort_key)
 
 
 @app.route("/categories/add", methods=["POST"])
