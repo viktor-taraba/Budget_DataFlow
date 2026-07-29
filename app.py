@@ -10,7 +10,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
 import gspread
 from google.oauth2.service_account import Credentials
-from config import COLUMN_ORDER, WORKSHEET_EXPENSE, WORKSHEET_INCOME
+from config import COLUMN_ORDER, DELETED_COLUMN_ORDER, WORKSHEET_EXPENSE, WORKSHEET_INCOME, WORKSHEET_DELETED
 
 load_dotenv()
 
@@ -59,7 +59,12 @@ def append_row(entry_type: str, row: dict):
     client = get_client()
     sheet = client.open_by_key(SHEET_ID)
     ws = sheet.worksheet(worksheet_for(entry_type))
-    values = [row.get(col, "") for col in COLUMN_ORDER]
+    values = []
+    for col in COLUMN_ORDER:
+        val = row.get(col, "")
+        if col == "amount" and val and isinstance(val, (int, float)):
+            val = str(val).replace(".", ",")
+        values.append(val)
     ws.append_row(values, value_input_option="USER_ENTERED")
 
 
@@ -188,9 +193,10 @@ def row_fingerprint(entry: dict) -> list:
     return [str(entry.get(col, "")) for col in FINGERPRINT_COLUMNS]
 
 
-def delete_row(ws_name: str, row_number: int, expected_fingerprint: list) -> bool:
+def delete_row(ws_name: str, row_number: int, expected_fingerprint: list, entry_type: str = None) -> bool:
     """
     Видаляє рядок з аркуша, але лише якщо він досі містить ті самі дані.
+    Перед видаленням архівує запис до аркуша DELETED з timestamp видалення.
 
     Сторінка могла бути відкрита давно, а таблиця за цей час — змінитися
     (додали або видалили записи, і номери рядків зсунулись). Тому перед
@@ -209,6 +215,19 @@ def delete_row(ws_name: str, row_number: int, expected_fingerprint: list) -> boo
     if row_fingerprint(current) != list(expected_fingerprint):
         return False
 
+    # Архівуємо запис до листа DELETED перед видаленням
+    if entry_type:
+        try:
+            deleted_ws = sheet.worksheet(WORKSHEET_DELETED)
+            deleted_entry = {**current}
+            deleted_entry["deleted_at"] = datetime.now(timezone.utc).isoformat()
+            deleted_entry["income_or_expense"] = "income" if entry_type == "income" else "expense"
+            values = [deleted_entry.get(col, "") for col in DELETED_COLUMN_ORDER]
+            deleted_ws.append_row(values, value_input_option="USER_ENTERED")
+        except Exception:
+            # Якщо архівування не вдалося, все одно видаляємо запис
+            pass
+
     ws.delete_rows(row_number)
     return True
 
@@ -219,6 +238,7 @@ def update_row(ws_name: str, row_number: int, expected_fingerprint: list, update
 
     updates: dict з ключами, які потрібно змінити (date, category, amount, note).
     Системні поля (submitted_at, added_at, device_info) не змінюються.
+    Встановлює updated_at на поточний час.
     """
     if not any(expected_fingerprint):
         return False
@@ -231,6 +251,7 @@ def update_row(ws_name: str, row_number: int, expected_fingerprint: list, update
     if row_fingerprint(current) != list(expected_fingerprint):
         return False
 
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     updated_entry = {**current, **updates}
     values = [updated_entry.get(col, "") for col in COLUMN_ORDER]
     ws.update(f'A{row_number}:Z{row_number}', [values])
@@ -413,7 +434,7 @@ def delete():
         return redirect(url_for("index"))
 
     try:
-        deleted = delete_row(worksheet_for(entry_type), row_number, expected_fingerprint)
+        deleted = delete_row(worksheet_for(entry_type), row_number, expected_fingerprint, entry_type)
     except Exception as exc:
         flash(f"Помилка видалення з таблиці: {exc}")
         return redirect(url_for("index"))
@@ -458,7 +479,7 @@ def edit():
     updates = {
         "date": entry_date,
         "category": category,
-        "amount": str(amount),
+        "amount": str(amount).replace(".", ","),
         "note": note,
     }
 
