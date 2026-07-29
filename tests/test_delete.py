@@ -20,6 +20,7 @@ def make_row(day, category, amount, added_at=None):
         "коментар",
         "2026-07-01T10:00:00",
         added_at if added_at is not None else f"2026-07-{day:02d}T10:00:00+00:00",
+        "",
         "pytest",
     ]
 
@@ -28,6 +29,7 @@ class FakeWorksheet:
     def __init__(self, rows):
         self.rows = rows
         self.deleted = []
+        self.archived = []
 
     def row_values(self, row_number):
         # Як і справжній gspread: за межами даних — порожній список.
@@ -39,10 +41,14 @@ class FakeWorksheet:
         self.deleted.append(row_number)
         del self.rows[row_number - 1]
 
+    def append_row(self, values, value_input_option=None):
+        self.archived.append(list(values))
+
 
 class FakeClient:
     def __init__(self, worksheet):
         self.worksheet_obj = worksheet
+        self.deleted_ws = FakeWorksheet([])
         self.opened_keys = []
         self.requested_names = []
 
@@ -52,6 +58,8 @@ class FakeClient:
 
     def worksheet(self, name):
         self.requested_names.append(name)
+        if name == "DELETED":
+            return self.deleted_ws
         return self.worksheet_obj
 
 
@@ -139,8 +147,8 @@ class TestDeleteRoute:
     def test_routes_income_to_income_worksheet(self, logged_in_client, monkeypatch):
         calls = {}
 
-        def fake_delete_row(ws_name, row_number, fingerprint):
-            calls["args"] = (ws_name, row_number, fingerprint)
+        def fake_delete_row(ws_name, row_number, fingerprint, entry_type=None):
+            calls["args"] = (ws_name, row_number, fingerprint, entry_type)
             return True
 
         monkeypatch.setattr(app_module, "delete_row", fake_delete_row)
@@ -148,6 +156,7 @@ class TestDeleteRoute:
         assert calls["args"][0] == app_module.WORKSHEET_INCOME
         assert calls["args"][1] == 3
         assert calls["args"][2] == ["2026-07-02", "Кава", "20", "2026-07-02T10:00:00+00:00"]
+        assert calls["args"][3] == "income"
 
     def test_reports_stale_page(self, logged_in_client, sheet):
         response = logged_in_client.post(

@@ -20,6 +20,7 @@ def make_row(day, category, amount, added_at=None):
         "коментар",
         "2026-07-01T10:00:00",
         added_at if added_at is not None else f"2026-07-{day:02d}T10:00:00+00:00",
+        "",
         "pytest",
     ]
 
@@ -196,4 +197,19 @@ class TestEditRoute:
         response = logged_in_client.post("/edit", data=self._form(row_number="не число"), follow_redirects=True)
         text = response.data.decode()
         assert "Некоректний запис для редагування" in text
+
+    def test_edit_records_amount_with_comma_decimal_separator(self, logged_in_client, sheet):
+        response = logged_in_client.post(
+            "/edit",
+            data=self._form(amount="215.75"),
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        text = response.data.decode()
+        assert "Запис оновлено" in text
+
+        # Перевіряємо, що сума записана з комою
+        updated_row = sheet.rows[2]
+        amount_index = app_module.COLUMN_ORDER.index("amount")
+        assert updated_row[amount_index] == "215,75", f"Очікувалось '215,75', отримано '{updated_row[amount_index]}'"
 

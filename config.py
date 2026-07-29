@@ -2,7 +2,11 @@ WORKSHEET_EXPENSE = "Витрати"
 
 WORKSHEET_INCOME = "Доходи"
 
-COLUMN_ORDER = ["date", "category", "amount", "note", "submitted_at", "added_at", "device_info"]
+WORKSHEET_DELETED = "DELETED"
+
+COLUMN_ORDER = ["date", "category", "amount", "note", "submitted_at", "added_at", "updated_at", "device_info"]
+
+DELETED_COLUMN_ORDER = ["date", "category", "amount", "note", "submitted_at", "added_at", "updated_at", "device_info", "deleted_at", "income_or_expense"]
 
 CATEGORIES = {
     "expense": [
