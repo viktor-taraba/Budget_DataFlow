@@ -500,7 +500,7 @@
 		const splitForm = document.getElementById('split-form');
 		const splitPairs = document.getElementById('split-pairs');
 		const splitAddBtn = document.getElementById('split-add-btn');
-		const amountInput = document.getElementById('amount');
+		const mainAmount = document.getElementById('amount');
 
 		function updateSplitVisibility() {
 		  const isExpense = document.querySelector('input[name="type"]:checked').value === 'expense';
@@ -509,6 +509,26 @@
 			splitToggle.checked = false;
 			splitForm.hidden = true;
 		  }
+		}
+
+		function recalculateRemainder() {
+		  const lastAmount = document.querySelector('.split-pair:last-child .split-amount');
+		  if (!lastAmount) return;
+
+		  const total = parseFloat(mainAmount.value.replace(',', '.'));
+		  if (isNaN(total)) {
+			lastAmount.value = '0';
+			return;
+		  }
+
+		  let sum = 0;
+		  document.querySelectorAll('.split-pair:not(:last-child) .split-amount').forEach(inp => {
+			const val = parseFloat(inp.value.replace(',', '.'));
+			if (!isNaN(val)) sum += val;
+		  });
+
+		  const remainder = total - sum;
+		  lastAmount.value = isNaN(remainder) ? '0' : remainder.toFixed(2);
 		}
 
 		function renderSplitPairs() {
@@ -539,38 +559,14 @@
 			amountInput.inputMode = 'decimal';
 
 			if (i === pairCount - 1) {
-			  amountLabel.textContent = 'Остаток (автоматично)';
+			  amountLabel.textContent = 'Залишок (автоматично)';
 			  amountInput.disabled = true;
 			  amountInput.className += ' split-amount--readonly';
-
-			  const recalculate = () => {
-				const total = parseFloat(amountInput.dataset.total || amountInput.parentElement.parentElement.querySelector('#amount').value.replace(',', '.'));
-				let sum = 0;
-				document.querySelectorAll('.split-pair:not(:last-child) .split-amount').forEach(inp => {
-				  const val = parseFloat(inp.value.replace(',', '.'));
-				  if (!isNaN(val)) sum += val;
-				});
-				amountInput.value = isNaN(total - sum) ? '0' : (total - sum).toFixed(2);
-			  };
-
-			  document.querySelectorAll('.split-pair:not(:last-child) .split-amount').forEach(inp => {
-				inp.addEventListener('input', recalculate);
-			  });
-			  amountInput.addEventListener('input', recalculate);
 			} else {
 			  amountLabel.textContent = 'Сума';
 			  amountInput.addEventListener('input', (e) => {
 				e.target.value = e.target.value.replace(/[^0-9.,]/g, '');
-				const lastAmount = document.querySelector('.split-pair:last-child .split-amount');
-				if (lastAmount) {
-				  const total = parseFloat(amountInput.value.replace(',', '.'));
-				  let sum = 0;
-				  document.querySelectorAll('.split-pair:not(:last-child) .split-amount').forEach(inp => {
-					const val = parseFloat(inp.value.replace(',', '.'));
-					if (!isNaN(val)) sum += val;
-				  });
-				  lastAmount.value = isNaN(total - sum) ? '0' : (total - sum).toFixed(2);
-				}
+				recalculateRemainder();
 			  });
 			}
 
@@ -582,6 +578,7 @@
 			  e.preventDefault();
 			  pair.remove();
 			  renderSplitPairs();
+			  recalculateRemainder();
 			});
 
 			pair.append(catLabel, catSelect, amountLabel, amountInput);
@@ -590,6 +587,8 @@
 			}
 			splitPairs.appendChild(pair);
 		  }
+
+		  recalculateRemainder();
 		}
 
 		typeExpense.addEventListener('change', updateSplitVisibility);
@@ -605,6 +604,12 @@
 		splitAddBtn.addEventListener('click', (e) => {
 		  e.preventDefault();
 		  renderSplitPairs();
+		});
+
+		mainAmount.addEventListener('input', () => {
+		  if (splitToggle.checked) {
+			recalculateRemainder();
+		  }
 		});
 
 		updateSplitVisibility();

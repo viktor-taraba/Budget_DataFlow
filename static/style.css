@@ -964,9 +964,7 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
 
 /* Розбиті операції у списку останніх записів */
 .recent-item--split {
-  border-left: 3px solid var(--accent);
-  padding-left: 12px;
-  margin-left: 0;
+  background: linear-gradient(to right, var(--accent) 0%, var(--accent) 2px, transparent 2px, transparent 100%);
 }
 
 .recent-item__split-summary {
@@ -998,11 +996,12 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
   list-style: none;
   background: var(--bg);
   padding: 8px 12px;
-  margin-left: 32px;
+  margin-left: 0;
   margin-top: 4px;
-  border-left: 2px solid var(--line);
-  border-radius: 0 8px 8px 0;
+  border-left: none;
+  border-radius: 8px;
   font-size: 13px;
+  border: 1px solid var(--line);
 }
 
 .recent-split-details[hidden] {
