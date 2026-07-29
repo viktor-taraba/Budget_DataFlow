@@ -861,3 +861,156 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
 }
 
 .categories-error[hidden] { display: none; }
+
+/* Розбивка витрат */
+#split-form { margin-bottom: 16px; }
+#split-form[hidden] { display: none; }
+
+.split-note {
+  font-size: 13px;
+  color: var(--ink-soft);
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: var(--accent-soft);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+}
+
+.split-pairs {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.split-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  background: var(--bg);
+  border-radius: 12px;
+  border: 1px solid var(--line);
+}
+
+.split-pair label {
+  font-size: 12px;
+  color: var(--ink-soft);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-bottom: 4px;
+  display: block;
+}
+
+.split-category, .split-amount {
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.split-category:focus, .split-amount:focus {
+  border-color: var(--accent);
+}
+
+.split-amount--readonly {
+  background: var(--line);
+  color: var(--ink-soft);
+  cursor: default;
+}
+
+.split-remove-btn {
+  grid-column: 1 / -1;
+  width: fit-content;
+  padding: 6px 12px;
+  border: none;
+  background: var(--expense-soft);
+  color: var(--expense);
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.split-remove-btn:hover {
+  background: var(--expense);
+  color: #fff;
+}
+
+.split-add-btn {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1.5px dashed var(--accent);
+  background: transparent;
+  color: var(--accent);
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.split-add-btn:hover {
+  background: var(--accent-soft);
+  border-style: solid;
+}
+
+/* Розбиті операції у списку останніх записів */
+.recent-item--split {
+  border-left: 3px solid var(--accent);
+  padding-left: 12px;
+  margin-left: 0;
+}
+
+.recent-item__split-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.recent-split-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 10px;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+}
+
+.recent-split-expand:hover {
+  transform: scale(1.2);
+}
+
+.recent-split-details {
+  list-style: none;
+  background: var(--bg);
+  padding: 8px 12px;
+  margin-left: 32px;
+  margin-top: 4px;
+  border-left: 2px solid var(--line);
+  border-radius: 0 8px 8px 0;
+  font-size: 13px;
+}
+
+.recent-split-details[hidden] {
+  display: none;
+}
+
+.split-detail-item {
+  padding: 4px 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
