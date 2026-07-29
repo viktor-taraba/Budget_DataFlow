@@ -73,6 +73,21 @@
         <input type="text" id="note" name="note" placeholder="Наприклад: АТБ, тиждень">
       </div>
 
+      <div class="field" id="split-toggle-container" style="display: none;">
+        <label class="field-label">
+          <input type="checkbox" id="split-toggle" name="use_split">
+          Розбити на категорії
+        </label>
+      </div>
+
+      <div id="split-form" hidden>
+        <div class="split-note">Остання сума вираховується автоматично</div>
+        <div id="split-pairs" class="split-pairs"></div>
+        <button type="button" id="split-add-btn" class="split-add-btn">+ Додати категорію</button>
+      </div>
+
+      <input type="hidden" id="split-breakdown" name="split_breakdown">
+
       <button class="submit-btn" type="submit">Зберегти запис</button>
     </form>
   </div>
@@ -83,8 +98,18 @@
     його з таблицею, щоб застаріла сторінка не видалила чужий рядок.
   #}
   {% macro recent_item(entry, kind, sign, fp_columns) %}
-	<li class="recent-item">
-		<span class="recent-item__meta">{{ entry.date }} · {{ entry.category }}</span>
+	<li class="recent-item {% if entry.split_count %}recent-item--split{% endif %}">
+		<span class="recent-item__meta">
+			{{ entry.date }} ·
+			{% if entry.split_count %}
+				<span class="recent-item__split-summary">
+					{{ entry.category }}
+					<button type="button" class="recent-split-expand" aria-label="Розгорнути деталі розбивки" title="Розгорнути деталі розбивки">▼</button>
+				</span>
+			{% else %}
+				{{ entry.category }}
+			{% endif %}
+		</span>
 		<span class="recent-item__right">
 			<span class="recent-item__amount recent-item__amount--{{ kind }}">{{ sign }}{{ entry.amount }} ₴</span>
 			<button type="button" class="recent-edit__btn"
@@ -98,19 +123,28 @@
 					data-edit-fp-date="{{ entry.date }}"
 					data-edit-fp-category="{{ entry.category }}"
 					data-edit-fp-amount="{{ entry.amount }}"
-					data-edit-fp-added-at="{{ entry.added_at }}">📝</button>
+					data-edit-fp-added-at="{{ entry.added_at }}"
+					{% if entry.split_count %}data-edit-split-id="{{ entry.split_id }}"{% endif %}>📝</button>
 			<form class="recent-delete" method="post" action="{{ url_for('delete') }}">
 				<input type="hidden" name="type" value="{{ kind }}">
 				<input type="hidden" name="row_number" value="{{ entry.row_number }}">
 				{% for col in fp_columns %}
 					<input type="hidden" name="fp_{{ col }}" value="{{ entry[col] }}">
 				{% endfor %}
+				{% if entry.split_count %}<input type="hidden" name="split_id" value="{{ entry.split_id }}">{% endif %}
 				<button type="submit" class="recent-delete__btn"
 						aria-label="Видалити запис" title="Видалити запис"
 						data-confirm="Видалити запис «{{ entry.category }}» на {{ entry.amount }} ₴ від {{ entry.date }}?">✕</button>
 			</form>
 		</span>
 	</li>
+	{% if entry.split_count %}
+		<li class="recent-split-details" hidden>
+			{% for split_entry in entry.split_entries %}
+				<div class="split-detail-item">{{ split_entry.category }} · {{ split_entry.amount }} ₴</div>
+			{% endfor %}
+		</li>
+	{% endif %}
   {% endmacro %}
 
   <div class="card recent-card">
@@ -344,6 +378,54 @@
 		  dateInput.setCustomValidity('Дата не може бути в майбутньому');
 		  }
 
+		  // Якщо активна розбивка, валідуємо її
+		  if (document.getElementById('split-toggle').checked) {
+			const pairs = document.querySelectorAll('.split-pair');
+			if (pairs.length < 2) {
+			  e.preventDefault();
+			  alert('Розбивка має містити мінімум 2 категорії');
+			  return;
+			}
+			const breakdown = [];
+			let validSplit = true;
+			pairs.forEach((pair, idx) => {
+			  const catSelect = pair.querySelector('select');
+			  const amountInput = pair.querySelector('input[type="text"]');
+			  const category = catSelect.value.trim();
+			  const amount = idx === pairs.length - 1 ? '' : amountInput.value.trim();
+
+			  if (!category) {
+				alert('Оберіть категорію для кожної частини');
+				validSplit = false;
+				return;
+			  }
+
+			  if (idx < pairs.length - 1) {
+				if (!amount) {
+				  alert('Введіть суму для кожної частини (крім останньої)');
+				  validSplit = false;
+				  return;
+				}
+				const parsed = parseFloat(amount.replace(',', '.'));
+				if (isNaN(parsed) || parsed <= 0) {
+				  alert('Сума має бути числом більше 0');
+				  validSplit = false;
+				  return;
+				}
+				breakdown.push({ category, amount: parsed });
+			  } else {
+				breakdown.push({ category, amount: '' });
+			  }
+			});
+
+			if (!validSplit) {
+			  e.preventDefault();
+			  return;
+			}
+
+			document.getElementById('split-breakdown').value = JSON.stringify(breakdown);
+		  }
+
 		  if (!e.target.checkValidity()) {
 		  e.preventDefault();
 		  e.target.reportValidity();
@@ -362,6 +444,19 @@
 
 		  document.getElementById('date').addEventListener('input', (e) => {
 		  e.target.setCustomValidity('');
+		  });
+
+		  // Розгортання/приховування деталей розбивки
+		  document.querySelectorAll('.recent-split-expand').forEach((btn) => {
+			  btn.addEventListener('click', (e) => {
+				  e.preventDefault();
+				  const item = btn.closest('.recent-item');
+				  const details = item.nextElementSibling;
+				  if (details && details.classList.contains('recent-split-details')) {
+					  details.hidden = !details.hidden;
+					  btn.textContent = details.hidden ? '▼' : '▲';
+				  }
+			  });
 		  });
 
 		  // Видалення записів — незворотна дія, тому питаємо підтвердження.
@@ -395,6 +490,130 @@
 		  });
 		  
 		  updateToggleIcon();
+
+	  // Керування розбивкою витрат
+	  (function() {
+		const typeExpense = document.getElementById('type-expense');
+		const typeIncome = document.getElementById('type-income');
+		const splitToggleContainer = document.getElementById('split-toggle-container');
+		const splitToggle = document.getElementById('split-toggle');
+		const splitForm = document.getElementById('split-form');
+		const splitPairs = document.getElementById('split-pairs');
+		const splitAddBtn = document.getElementById('split-add-btn');
+		const mainAmount = document.getElementById('amount');
+
+		function updateSplitVisibility() {
+		  const isExpense = document.querySelector('input[name="type"]:checked').value === 'expense';
+		  splitToggleContainer.style.display = isExpense ? 'block' : 'none';
+		  if (!isExpense) {
+			splitToggle.checked = false;
+			splitForm.hidden = true;
+		  }
+		}
+
+		function recalculateRemainder() {
+		  const lastAmount = document.querySelector('.split-pair:last-child .split-amount');
+		  if (!lastAmount) return;
+
+		  const total = parseFloat(mainAmount.value.replace(',', '.'));
+		  if (isNaN(total)) {
+			lastAmount.value = '0';
+			return;
+		  }
+
+		  let sum = 0;
+		  document.querySelectorAll('.split-pair:not(:last-child) .split-amount').forEach(inp => {
+			const val = parseFloat(inp.value.replace(',', '.'));
+			if (!isNaN(val)) sum += val;
+		  });
+
+		  const remainder = total - sum;
+		  lastAmount.value = isNaN(remainder) ? '0' : remainder.toFixed(2);
+		}
+
+		function renderSplitPairs() {
+		  splitPairs.innerHTML = '';
+		  const pairs = document.querySelectorAll('.split-pair');
+		  const pairCount = pairs.length || 2;
+
+		  for (let i = 0; i < pairCount; i++) {
+			const pair = document.createElement('div');
+			pair.className = 'split-pair';
+
+			const catLabel = document.createElement('label');
+			catLabel.textContent = 'Категорія';
+			const catSelect = document.createElement('select');
+			catSelect.className = 'split-category';
+			categories.expense.forEach(cat => {
+			  const opt = document.createElement('option');
+			  opt.value = cat;
+			  opt.textContent = cat;
+			  catSelect.appendChild(opt);
+			});
+
+			const amountLabel = document.createElement('label');
+			const amountInput = document.createElement('input');
+			amountInput.type = 'text';
+			amountInput.className = 'split-amount';
+			amountInput.placeholder = '0';
+			amountInput.inputMode = 'decimal';
+
+			if (i === pairCount - 1) {
+			  amountLabel.textContent = 'Залишок (автоматично)';
+			  amountInput.disabled = true;
+			  amountInput.className += ' split-amount--readonly';
+			} else {
+			  amountLabel.textContent = 'Сума';
+			  amountInput.addEventListener('input', (e) => {
+				e.target.value = e.target.value.replace(/[^0-9.,]/g, '');
+				recalculateRemainder();
+			  });
+			}
+
+			const removeBtn = document.createElement('button');
+			removeBtn.type = 'button';
+			removeBtn.className = 'split-remove-btn';
+			removeBtn.textContent = '✕';
+			removeBtn.addEventListener('click', (e) => {
+			  e.preventDefault();
+			  pair.remove();
+			  renderSplitPairs();
+			  recalculateRemainder();
+			});
+
+			pair.append(catLabel, catSelect, amountLabel, amountInput);
+			if (i < pairCount - 1) {
+			  pair.appendChild(removeBtn);
+			}
+			splitPairs.appendChild(pair);
+		  }
+
+		  recalculateRemainder();
+		}
+
+		typeExpense.addEventListener('change', updateSplitVisibility);
+		typeIncome.addEventListener('change', updateSplitVisibility);
+
+		splitToggle.addEventListener('change', (e) => {
+		  splitForm.hidden = !e.target.checked;
+		  if (e.target.checked) {
+			renderSplitPairs();
+		  }
+		});
+
+		splitAddBtn.addEventListener('click', (e) => {
+		  e.preventDefault();
+		  renderSplitPairs();
+		});
+
+		mainAmount.addEventListener('input', () => {
+		  if (splitToggle.checked) {
+			recalculateRemainder();
+		  }
+		});
+
+		updateSplitVisibility();
+	  })();
 	  </script>
 
   <script>
