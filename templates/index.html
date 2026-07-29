@@ -100,7 +100,7 @@
   {% macro recent_item(entry, kind, sign, fp_columns) %}
 	<li class="recent-item {% if entry.split_count %}recent-item--split{% endif %}">
 		<span class="recent-item__meta">
-			{{ entry.date }} ·
+			{{ entry.date[8:10] }}.{{ entry.date[5:7] }} ·
 			{% if entry.split_count %}
 				<span class="recent-item__split-summary">
 					{{ entry.category }}
