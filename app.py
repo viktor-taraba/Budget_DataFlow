@@ -497,7 +497,7 @@ def validate_split(category_amount_pairs, total_amount):
     """
     Валідує розбивку суми на кілька категорій.
 
-    category_amount_pairs: list of (category, amount_str) tuples.
+    category_amount_pairs: list of dicts {"category": str, "amount": float or str}.
     total_amount: float — загальна сума, яку потрібно розбити.
 
     Правила:
@@ -519,10 +519,14 @@ def validate_split(category_amount_pairs, total_amount):
     split_rows = []
     sum_entered = 0.0
 
-    for category, amount_str in category_amount_pairs[:-1]:
+    for pair in category_amount_pairs[:-1]:
+        category = pair["category"]
+        amount_str = pair["amount"]
+
         # Якщо amount це число (з JSON), конвертуємо до рядка для validate_amount
         if isinstance(amount_str, (int, float)):
             amount_str = str(amount_str)
+
         validated = validate_amount(amount_str)
         if validated is None:
             return False, f"Невірна сума для категорії '{category}'", None
@@ -536,7 +540,7 @@ def validate_split(category_amount_pairs, total_amount):
     if remainder < 0.01:
         return False, f"Остаток занадто малий ({remainder}). Перевірте суми.", None
 
-    last_category = category_amount_pairs[-1][0]
+    last_category = category_amount_pairs[-1]["category"]
     split_rows.append({"category": last_category, "amount": remainder})
 
     return True, None, split_rows
