@@ -520,6 +520,9 @@ def validate_split(category_amount_pairs, total_amount):
     sum_entered = 0.0
 
     for category, amount_str in category_amount_pairs[:-1]:
+        # Якщо amount це число (з JSON), конвертуємо до рядка для validate_amount
+        if isinstance(amount_str, (int, float)):
+            amount_str = str(amount_str)
         validated = validate_amount(amount_str)
         if validated is None:
             return False, f"Невірна сума для категорії '{category}'", None
