@@ -18,12 +18,12 @@ def make_row(day, category, amount, added_at=None):
         category,
         str(amount),
         "коментар",
-        "",  # split_id
-        "",  # split_info
         "2026-07-01T10:00:00",
         added_at if added_at is not None else f"2026-07-{day:02d}T10:00:00+00:00",
         "",
         "pytest",
+        "",  # split_id
+        "",  # split_info
     ]
 
 
