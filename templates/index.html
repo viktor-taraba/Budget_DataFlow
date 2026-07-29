@@ -129,7 +129,11 @@
 				<input type="hidden" name="type" value="{{ kind }}">
 				<input type="hidden" name="row_number" value="{{ entry.row_number }}">
 				{% for col in fp_columns %}
-					<input type="hidden" name="fp_{{ col }}" value="{{ entry[col] }}">
+					{% if entry.split_count and col == 'category' %}
+						<input type="hidden" name="fp_{{ col }}" value="{{ entry.split_entries[0].category }}">
+					{% else %}
+						<input type="hidden" name="fp_{{ col }}" value="{{ entry[col] }}">
+					{% endif %}
 				{% endfor %}
 				{% if entry.split_count %}<input type="hidden" name="split_id" value="{{ entry.split_id }}">{% endif %}
 				<button type="submit" class="recent-delete__btn"
@@ -1021,7 +1025,13 @@
 					  return;
 				  }
 				  const breakdown = generateEditSplitBreakdown();
+				  if (!breakdown || breakdown.length === 0) {
+					  e.preventDefault();
+					  alert('Розбивка повинна мати мінімум 2 категорії з коректними сумами');
+					  return;
+				  }
 				  document.getElementById('edit-split-breakdown').value = JSON.stringify(breakdown);
+				  console.log('Split breakdown:', breakdown);
 			  } else {
 				  const amount = editAmount.value;
 				  const category = editCategorySelect.value;
