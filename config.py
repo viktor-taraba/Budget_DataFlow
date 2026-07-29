@@ -4,9 +4,9 @@ WORKSHEET_INCOME = "Доходи"
 
 WORKSHEET_DELETED = "Deleted"
 
-COLUMN_ORDER = ["date", "category", "amount", "note", "split_id", "split_info", "submitted_at", "added_at", "updated_at", "device_info"]
+COLUMN_ORDER = ["date", "category", "amount", "note", "submitted_at", "added_at", "updated_at", "device_info", "split_id", "split_info"]
 
-DELETED_COLUMN_ORDER = ["date", "category", "amount", "note", "split_id", "split_info", "submitted_at", "added_at", "updated_at", "device_info", "deleted_at", "income_or_expense"]
+DELETED_COLUMN_ORDER = ["date", "category", "amount", "note", "submitted_at", "added_at", "updated_at", "device_info", "deleted_at", "income_or_expense", "split_id", "split_info"]
 
 CATEGORIES = {
     "expense": [
