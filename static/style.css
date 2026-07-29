@@ -609,6 +609,49 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
   gap: 16px;
 }
 
+.btn {
+  border: none;
+  border-radius: 12px;
+  padding: 14px 20px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-decoration: none;
+  user-select: none;
+}
+
+.btn:active {
+  transform: scale(0.96);
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(36, 52, 77, 0.15);
+}
+
+.btn-primary:hover {
+  background: var(--navy);
+  box-shadow: 0 4px 12px rgba(36, 52, 77, 0.25);
+}
+
+.btn-secondary {
+  background: var(--bg);
+  color: var(--ink);
+  border: 1.5px solid var(--line);
+}
+
+.btn-secondary:hover {
+  background: var(--line);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .edit-actions {
   display: flex;
   gap: 12px;
