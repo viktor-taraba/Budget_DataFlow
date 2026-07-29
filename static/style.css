@@ -306,6 +306,7 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
 .recent-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .recent-item:last-child { border-bottom: none; }
 .recent-item__meta { color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-item--split .recent-item__meta { white-space: normal; overflow: visible; text-overflow: initial; }
 .recent-item__amount { font-family: "JetBrains Mono", "Courier New", monospace; font-weight: 600; white-space: nowrap; }
 .recent-item__amount--expense { color: var(--expense); }
 .recent-item__amount--income { color: var(--income); }
