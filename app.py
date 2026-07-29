@@ -217,16 +217,12 @@ def delete_row(ws_name: str, row_number: int, expected_fingerprint: list, entry_
 
     # Архівуємо запис до листа DELETED перед видаленням
     if entry_type:
-        try:
-            deleted_ws = sheet.worksheet(WORKSHEET_DELETED)
-            deleted_entry = {**current}
-            deleted_entry["deleted_at"] = datetime.now(timezone.utc).isoformat()
-            deleted_entry["income_or_expense"] = "income" if entry_type == "income" else "expense"
-            values = [deleted_entry.get(col, "") for col in DELETED_COLUMN_ORDER]
-            deleted_ws.append_row(values, value_input_option="USER_ENTERED")
-        except Exception:
-            # Якщо архівування не вдалося, все одно видаляємо запис
-            pass
+        deleted_ws = sheet.worksheet(WORKSHEET_DELETED)
+        deleted_entry = {**current}
+        deleted_entry["deleted_at"] = datetime.now(timezone.utc).isoformat()
+        deleted_entry["income_or_expense"] = "income" if entry_type == "income" else "expense"
+        values = [deleted_entry.get(col, "") for col in DELETED_COLUMN_ORDER]
+        deleted_ws.append_row(values, value_input_option="USER_ENTERED")
 
     ws.delete_rows(row_number)
     return True

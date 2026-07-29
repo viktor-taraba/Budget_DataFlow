@@ -58,7 +58,7 @@ class FakeClient:
 
     def worksheet(self, name):
         self.requested_names.append(name)
-        if name == "DELETED":
+        if name == "Deleted":
             return self.deleted_ws
         return self.worksheet_obj
 
