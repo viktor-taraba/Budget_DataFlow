@@ -10,7 +10,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
 import gspread
 from google.oauth2.service_account import Credentials
-from config import CATEGORIES, COLUMN_ORDER, WORKSHEET_EXPENSE, WORKSHEET_INCOME
+from config import COLUMN_ORDER, WORKSHEET_EXPENSE, WORKSHEET_INCOME
 
 load_dotenv()
 
@@ -18,6 +18,16 @@ app = Flask(__name__)
 app.secret_key = os.environ["FLASK_SECRET_KEY"]
 SHEET_ID = os.environ["GOOGLE_SHEET_ID"]
 APP_PASSWORD = os.environ["APP_PASSWORD"]
+
+# Завантажуємо категорії з categories.json
+def load_categories():
+    try:
+        with open("categories.json", "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"expense": [], "income": []}
+
+CATEGORIES = load_categories()
 
 # Render (і більшість хостингів) стоїть за проксі: без цього request.remote_addr завжди буде адресою проксі, а не клієнта,
 # і rate-limit нижче рахуватиме всіх користувачів як одного.
@@ -495,6 +505,73 @@ def stats():
             "difference": round(income["total"] - expense["total"], 2),
         }
     )
+
+
+@app.route("/categories", methods=["GET"])
+@login_required
+def get_categories_endpoint():
+    return jsonify(CATEGORIES)
+
+
+def save_categories():
+    with open("categories.json", "w", encoding="utf-8") as f:
+        json.dump(CATEGORIES, f, ensure_ascii=False, indent=2)
+
+
+@app.route("/categories/add", methods=["POST"])
+@login_required
+def add_category():
+    entry_type = request.json.get("type")
+    category_name = request.json.get("name", "").strip()
+
+    if entry_type not in ("income", "expense"):
+        return jsonify({"error": "Некоректний тип"}), 400
+    if not category_name:
+        return jsonify({"error": "Назва категорії не може бути порожною"}), 400
+    if category_name in CATEGORIES[entry_type]:
+        return jsonify({"error": "Така категорія вже існує"}), 409
+
+    CATEGORIES[entry_type].append(category_name)
+    save_categories()
+    return jsonify({"success": True, "categories": CATEGORIES})
+
+
+@app.route("/categories/delete", methods=["POST"])
+@login_required
+def delete_category():
+    entry_type = request.json.get("type")
+    category_name = request.json.get("name", "").strip()
+
+    if entry_type not in ("income", "expense"):
+        return jsonify({"error": "Некоректний тип"}), 400
+    if category_name not in CATEGORIES[entry_type]:
+        return jsonify({"error": "Категорія не знайдена"}), 404
+
+    CATEGORIES[entry_type].remove(category_name)
+    save_categories()
+    return jsonify({"success": True, "categories": CATEGORIES})
+
+
+@app.route("/categories/rename", methods=["POST"])
+@login_required
+def rename_category():
+    entry_type = request.json.get("type")
+    old_name = request.json.get("old_name", "").strip()
+    new_name = request.json.get("new_name", "").strip()
+
+    if entry_type not in ("income", "expense"):
+        return jsonify({"error": "Некоректний тип"}), 400
+    if not old_name or not new_name:
+        return jsonify({"error": "Назви не можуть бути порожними"}), 400
+    if old_name not in CATEGORIES[entry_type]:
+        return jsonify({"error": "Стара категорія не знайдена"}), 404
+    if new_name in CATEGORIES[entry_type]:
+        return jsonify({"error": "Така категорія вже існує"}), 409
+
+    idx = CATEGORIES[entry_type].index(old_name)
+    CATEGORIES[entry_type][idx] = new_name
+    save_categories()
+    return jsonify({"success": True, "categories": CATEGORIES})
 
 
 if __name__ == "__main__":

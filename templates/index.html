@@ -22,6 +22,7 @@
 	<div class="brand__title">Бюджет</div>
 	</div>
 	<div class="brand__actions">
+	  <button type="button" class="theme-toggle" id="categories-toggle" aria-label="Керування категоріями" title="Керування категоріями">⚙️</button>
 	  <button type="button" class="theme-toggle" id="stats-toggle" aria-label="Статистика" title="Статистика">📊</button>
 	  <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Перемкнути тему" title="Перемкнути світлу/темну тему">🌙</button>
 	</div>
@@ -147,6 +148,31 @@
   </div>
 	
   <a class="footer-link" href="{{ url_for('logout') }}">Вийти</a>
+
+  {# Модальне вікно керування категоріями #}
+  <div class="categories-overlay" id="categories-overlay" hidden>
+	<div class="categories-dialog" role="dialog" aria-modal="true" aria-labelledby="categories-title">
+	  <div class="categories-dialog__header">
+		<h2 id="categories-title" class="categories-dialog__title">Керування категоріями</h2>
+		<button type="button" class="categories-close" id="categories-close" aria-label="Закрити">✕</button>
+	  </div>
+
+	  <div class="categories-tabs">
+		<button type="button" class="categories-tab is-active" data-type="expense">Витрати</button>
+		<button type="button" class="categories-tab" data-type="income">Доходи</button>
+	  </div>
+
+	  <div class="categories-body" id="categories-body">
+		<div class="categories-add">
+		  <input type="text" id="category-input" class="categories-input" placeholder="Нова категорія (наприклад: 🎬 Кіно)">
+		  <button type="button" id="category-add-btn" class="categories-add-btn">Додати</button>
+		</div>
+
+		<div class="categories-list" id="categories-list"></div>
+		<div class="categories-error" id="categories-error" hidden></div>
+	  </div>
+	</div>
+  </div>
 
   {# Модальне вікно редагування запису #}
   <div class="edit-overlay" id="edit-overlay" hidden>
@@ -370,6 +396,165 @@
 		  
 		  updateToggleIcon();
 	  </script>
+
+  <script>
+	  // Керування категоріями
+	  (function () {
+		  const overlay = document.getElementById('categories-overlay');
+		  const closeBtn = document.getElementById('categories-close');
+		  const tabs = document.querySelectorAll('.categories-tab');
+		  const input = document.getElementById('category-input');
+		  const addBtn = document.getElementById('category-add-btn');
+		  const list = document.getElementById('categories-list');
+		  const error = document.getElementById('categories-error');
+
+		  let currentType = 'expense';
+		  let categories = {};
+
+		  function showError(msg) {
+			  error.textContent = msg;
+			  error.hidden = false;
+			  setTimeout(() => { error.hidden = true; }, 3000);
+		  }
+
+		  async function loadCategories() {
+			  try {
+				  const response = await fetch('/categories');
+				  if (!response.ok) throw new Error('Помилка завантаження');
+				  categories = await response.json();
+				  renderList();
+			  } catch (err) {
+				  showError('Не вдалося завантажити категорії');
+			  }
+		  }
+
+		  function renderList() {
+			  list.innerHTML = '';
+			  const items = categories[currentType] || [];
+			  items.forEach((cat) => {
+				  const item = document.createElement('div');
+				  item.className = 'categories-item';
+
+				  const span = document.createElement('span');
+				  span.className = 'categories-item__name';
+				  span.textContent = cat;
+
+				  const btns = document.createElement('div');
+				  btns.className = 'categories-item__actions';
+
+				  const editBtn = document.createElement('button');
+				  editBtn.type = 'button';
+				  editBtn.className = 'categories-item__btn categories-item__btn--edit';
+				  editBtn.textContent = '✏️';
+				  editBtn.title = 'Перейменувати';
+				  editBtn.addEventListener('click', () => renameCategory(cat));
+
+				  const delBtn = document.createElement('button');
+				  delBtn.type = 'button';
+				  delBtn.className = 'categories-item__btn categories-item__btn--delete';
+				  delBtn.textContent = '✕';
+				  delBtn.title = 'Видалити';
+				  delBtn.addEventListener('click', () => deleteCategory(cat));
+
+				  btns.append(editBtn, delBtn);
+				  item.append(span, btns);
+				  list.appendChild(item);
+			  });
+		  }
+
+		  async function deleteCategory(name) {
+			  if (!confirm(`Видалити категорію «${name}»?`)) return;
+
+			  try {
+				  const response = await fetch('/categories/delete', {
+					  method: 'POST',
+					  headers: { 'Content-Type': 'application/json' },
+					  body: JSON.stringify({ type: currentType, name })
+				  });
+
+				  if (!response.ok) {
+					  const data = await response.json();
+					  throw new Error(data.error || 'Помилка видалення');
+				  }
+
+				  await loadCategories();
+			  } catch (err) {
+				  showError(err.message);
+			  }
+		  }
+
+		  async function renameCategory(oldName) {
+			  const newName = prompt('Нова назва категорії:', oldName);
+			  if (!newName || newName === oldName) return;
+
+			  try {
+				  const response = await fetch('/categories/rename', {
+					  method: 'POST',
+					  headers: { 'Content-Type': 'application/json' },
+					  body: JSON.stringify({ type: currentType, old_name: oldName, new_name: newName })
+				  });
+
+				  if (!response.ok) {
+					  const data = await response.json();
+					  throw new Error(data.error || 'Помилка перейменування');
+				  }
+
+				  await loadCategories();
+			  } catch (err) {
+				  showError(err.message);
+			  }
+		  }
+
+		  addBtn.addEventListener('click', async () => {
+			  const name = input.value.trim();
+			  if (!name) {
+				  showError('Введіть назву категорії');
+				  return;
+			  }
+
+			  try {
+				  const response = await fetch('/categories/add', {
+					  method: 'POST',
+					  headers: { 'Content-Type': 'application/json' },
+					  body: JSON.stringify({ type: currentType, name })
+				  });
+
+				  if (!response.ok) {
+					  const data = await response.json();
+					  throw new Error(data.error || 'Помилка додавання');
+				  }
+
+				  input.value = '';
+				  await loadCategories();
+			  } catch (err) {
+				  showError(err.message);
+			  }
+		  });
+
+		  input.addEventListener('keypress', (e) => {
+			  if (e.key === 'Enter') addBtn.click();
+		  });
+
+		  tabs.forEach((tab) => {
+			  tab.addEventListener('click', () => {
+				  tabs.forEach((t) => t.classList.remove('is-active'));
+				  tab.classList.add('is-active');
+				  currentType = tab.dataset.type;
+				  renderList();
+			  });
+		  });
+
+		  closeBtn.addEventListener('click', () => { overlay.hidden = true; });
+		  overlay.addEventListener('click', (e) => {
+			  if (e.target === overlay) overlay.hidden = true;
+		  });
+
+		  document.getElementById('categories-toggle').addEventListener('click', () => {
+			  overlay.hidden = false;
+			  loadCategories();
+		  });
+	  })();
+  </script>
 
   <script>
 	  // Редагування запису
