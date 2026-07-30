@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>Бюджет</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>">
   <script>
 	(function () {
 	    const stored = localStorage.getItem('theme');
@@ -18,7 +19,7 @@
 <body>
   <div class="brand">
 	<div class="brand__left">
-	<div class="brand__mark"></div>
+	<div class="brand__mark">💰</div>
 	<div class="brand__title">Бюджет</div>
 	</div>
 	<div class="brand__actions">
@@ -1215,8 +1216,11 @@
 			  const tbody = document.getElementById('stats-table-body');
 			  tbody.innerHTML = '';
 
-			  expenseDaily.forEach((point, index) => {
-				  const incomePoint = incomeDaily[index] || { amount: 0 };
+			  // Сортуємо по датам в порядку спадання (новіші дні першими)
+			  const sortedExpenseDaily = [...expenseDaily].reverse();
+
+			  sortedExpenseDaily.forEach((point, index) => {
+				  const incomePoint = incomeDaily.find(p => p.date === point.date) || { amount: 0 };
 				  const tr = document.createElement('tr');
 
 				  const dateCell = document.createElement('td');
