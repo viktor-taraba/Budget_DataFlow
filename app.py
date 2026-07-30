@@ -4,8 +4,7 @@ import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from functools import wraps
-from urllib.request import urlopen
-from urllib.error import URLError
+import requests
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -65,6 +64,7 @@ _exchange_rates_cache = {}
 def get_exchange_rate(date_iso: str) -> float:
     """
     Отримує курс USD до UAH від НБУ для конкретної дати.
+    date_iso у форматі 'YYYY-MM-DD', наприклад '2025-09-01'
     Повертає курс (float) або None при помилці.
     Результати кешуються протягом сесії.
     """
@@ -73,16 +73,17 @@ def get_exchange_rate(date_iso: str) -> float:
 
     try:
         date_obj = datetime.strptime(date_iso, "%Y-%m-%d").date()
-        date_str = date_obj.strftime("%d.%m.%Y")
-        url = f"https://bank.gov.ua/NBUStatService/v1/statdaily?valcode=USD&date={date_str}"
-        response = urlopen(url, timeout=5)
-        data = json.loads(response.read().decode("utf-8"))
+        date_str = date_obj.strftime("%Y%m%d")
+
+        url = f"https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?date={date_str}&valcode=USD&json"
+        response = requests.get(url, timeout=5)
+        data = response.json()
 
         if data and len(data) > 0:
             rate = float(data[0]["rate"])
             _exchange_rates_cache[date_iso] = rate
             return rate
-    except (URLError, json.JSONDecodeError, KeyError, ValueError, IndexError):
+    except (requests.RequestException, json.JSONDecodeError, KeyError, ValueError, IndexError, TypeError):
         pass
 
     return None

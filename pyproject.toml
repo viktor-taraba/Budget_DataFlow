@@ -12,4 +12,5 @@ dependencies = [
     "gunicorn>=26.0.0",
     "pytest>=9.1.1",
     "python-dotenv>=1.2.2",
+    "requests>=2.31.0",
 ]
