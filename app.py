@@ -4,6 +4,8 @@ import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from functools import wraps
+from urllib.request import urlopen
+from urllib.error import URLError
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -54,6 +56,36 @@ def get_client():
         creds = Credentials.from_service_account_info(info, scopes=scopes)
         _gs_client = gspread.authorize(creds)
     return _gs_client
+
+
+# Кеш курсів НБУ {date_iso: rate}
+_exchange_rates_cache = {}
+
+
+def get_exchange_rate(date_iso: str) -> float:
+    """
+    Отримує курс USD до UAH від НБУ для конкретної дати.
+    Повертає курс (float) або None при помилці.
+    Результати кешуються протягом сесії.
+    """
+    if date_iso in _exchange_rates_cache:
+        return _exchange_rates_cache[date_iso]
+
+    try:
+        date_obj = datetime.strptime(date_iso, "%Y-%m-%d").date()
+        date_str = date_obj.strftime("%d.%m.%Y")
+        url = f"https://bank.gov.ua/NBUStatService/v1/statdaily?valcode=USD&date={date_str}"
+        response = urlopen(url, timeout=5)
+        data = json.loads(response.read().decode("utf-8"))
+
+        if data and len(data) > 0:
+            rate = float(data[0]["rate"])
+            _exchange_rates_cache[date_iso] = rate
+            return rate
+    except (URLError, json.JSONDecodeError, KeyError, ValueError, IndexError):
+        pass
+
+    return None
 
 
 def worksheet_for(entry_type: str) -> str:
@@ -297,12 +329,57 @@ def _aggregate_stats(entries, start_date: str, end_date: str) -> dict:
     return {"total": round(total, 2), "daily": daily, "categories": categories}
 
 
-def get_period_stats(ws_name: str, start_date: str, end_date: str) -> dict:
+def _aggregate_stats_usd(entries, start_date: str, end_date: str) -> dict:
+    """
+    Агрегує записи на USD, конвертуючи кожний запис за його датою.
+    Якщо курс недоступний для якої-небудь дати, записи за цією датою пропускаються.
+    """
+    daily_totals = {}
+    category_totals = {}
+    total = 0.0
+
+    for entry in entries:
+        entry_date = entry.get("date", "")
+        if not (start_date <= entry_date <= end_date):
+            continue
+        amount = validate_amount(entry.get("amount"))
+        if amount is None:
+            continue
+
+        rate = get_exchange_rate(entry_date)
+        if rate is None:
+            continue
+
+        amount_usd = amount / rate
+        total += amount_usd
+        daily_totals[entry_date] = daily_totals.get(entry_date, 0.0) + amount_usd
+        category = entry.get("category") or "Інше"
+        category_totals[category] = category_totals.get(category, 0.0) + amount_usd
+
+    daily = [
+        {"date": d, "amount": round(daily_totals.get(d, 0.0), 2)}
+        for d in _date_range(start_date, end_date)
+    ]
+    categories = sorted(
+        ({"category": c, "amount": round(a, 2)} for c, a in category_totals.items()),
+        key=lambda item: item["amount"],
+        reverse=True,
+    )
+
+    return {"total": round(total, 2), "daily": daily, "categories": categories}
+
+
+def get_period_stats(ws_name: str, start_date: str, end_date: str, currency: str = "UAH") -> dict:
     """Читає весь аркуш і агрегує його за _aggregate_stats для заданого періоду."""
     client = get_client()
     sheet = client.open_by_key(SHEET_ID)
     ws = sheet.worksheet(ws_name)
-    return _aggregate_stats(_all_entries(ws.get_all_values()), start_date, end_date)
+    entries = _all_entries(ws.get_all_values())
+
+    if currency == "USD":
+        return _aggregate_stats_usd(entries, start_date, end_date)
+    else:
+        return _aggregate_stats(entries, start_date, end_date)
 
 
 # Видалення записів
@@ -880,6 +957,11 @@ def stats():
 
     start_date = validate_date(request.args.get("start")) or default_start
     end_date = validate_date(request.args.get("end")) or today.isoformat()
+    currency = request.args.get("currency", "UAH").upper()
+
+    if currency not in ("UAH", "USD"):
+        currency = "UAH"
+
     if start_date > end_date:
         start_date, end_date = end_date, start_date
 
@@ -888,8 +970,8 @@ def stats():
         start_date = (date.fromisoformat(end_date) - timedelta(days=MAX_STATS_RANGE_DAYS)).isoformat()
 
     try:
-        expense = get_period_stats(WORKSHEET_EXPENSE, start_date, end_date)
-        income = get_period_stats(WORKSHEET_INCOME, start_date, end_date)
+        expense = get_period_stats(WORKSHEET_EXPENSE, start_date, end_date, currency)
+        income = get_period_stats(WORKSHEET_INCOME, start_date, end_date, currency)
     except Exception as exc:
         return jsonify({"error": f"Не вдалося завантажити статистику: {exc}"}), 502
 
@@ -897,6 +979,7 @@ def stats():
         {
             "start": start_date,
             "end": end_date,
+            "currency": currency,
             "expense": expense,
             "income": income,
             "difference": round(income["total"] - expense["total"], 2),

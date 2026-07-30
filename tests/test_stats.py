@@ -141,8 +141,8 @@ class TestGetPeriodStats:
 
 class TestStatsRoute:
     def _stub_stats(self, monkeypatch, calls):
-        def fake_get_period_stats(ws_name, start_date, end_date):
-            calls.append((ws_name, start_date, end_date))
+        def fake_get_period_stats(ws_name, start_date, end_date, currency="UAH"):
+            calls.append((ws_name, start_date, end_date, currency))
             return {"total": 0.0, "daily": [], "categories": []}
 
         monkeypatch.setattr(app_module, "get_period_stats", fake_get_period_stats)
@@ -163,7 +163,7 @@ class TestStatsRoute:
         expected_start = (today - timedelta(days=29)).isoformat()
         assert data["start"] == expected_start
         assert data["end"] == today.isoformat()
-        assert {c[1:] for c in calls} == {(expected_start, today.isoformat())}
+        assert {c[1:] for c in calls} == {(expected_start, today.isoformat(), "UAH")}
 
     def test_uses_custom_range(self, logged_in_client, monkeypatch):
         calls = []
@@ -174,7 +174,7 @@ class TestStatsRoute:
 
         assert data["start"] == "2026-06-01"
         assert data["end"] == "2026-06-10"
-        assert {c[1:] for c in calls} == {("2026-06-01", "2026-06-10")}
+        assert {c[1:] for c in calls} == {("2026-06-01", "2026-06-10", "UAH")}
 
     def test_swaps_reversed_range(self, logged_in_client, monkeypatch):
         calls = []
@@ -208,7 +208,7 @@ class TestStatsRoute:
         assert span == app_module.MAX_STATS_RANGE_DAYS
 
     def test_computes_difference(self, logged_in_client, monkeypatch):
-        def fake_get_period_stats(ws_name, start_date, end_date):
+        def fake_get_period_stats(ws_name, start_date, end_date, currency="UAH"):
             if ws_name == WORKSHEET_EXPENSE:
                 return {"total": 300.0, "daily": [], "categories": []}
             return {"total": 1000.0, "daily": [], "categories": []}
