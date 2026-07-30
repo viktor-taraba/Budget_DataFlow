@@ -37,16 +37,13 @@ class FakeWorksheet:
             return list(self.rows[row_number - 1])
         return []
 
-    def update(self, cell_range, values):
-        # Парсимо діапазон типу 'A3:Z3'
-        if ':' in cell_range:
-            start = cell_range.split(':')[0]
-            row_num = int(''.join(c for c in start if c.isdigit()))
-        else:
-            row_num = int(''.join(c for c in cell_range if c.isdigit()))
+    def update(self, values, range_name, value_input_option=None):
+        # Сигнатура як у gspread 6: спочатку значення, потім діапазон ('A3:J3').
+        start = range_name.split(':')[0]
+        row_num = int(''.join(c for c in start if c.isdigit()))
 
         if 1 <= row_num <= len(self.rows):
-            self.rows[row_num - 1] = values[0]
+            self.rows[row_num - 1] = list(values[0])
             self.updated.append(row_num)
 
 
