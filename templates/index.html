@@ -290,6 +290,10 @@
 		  <input type="date" id="stats-end" max="{{ today }}">
 		  <button type="button" class="stats-apply" id="stats-apply">Застосувати</button>
 		</div>
+		<div class="stats-currency-toggle">
+		  <button type="button" class="stats-currency-btn stats-currency-btn--active" id="stats-currency-uah" data-currency="UAH">₴</button>
+		  <button type="button" class="stats-currency-btn" id="stats-currency-usd" data-currency="USD">$</button>
+		</div>
 		<div class="stats-period-label" id="stats-period-label"></div>
 	  </div>
 
@@ -1108,11 +1112,17 @@
 		  const startInput = document.getElementById('stats-start');
 		  const endInput = document.getElementById('stats-end');
 		  const tooltip = document.getElementById('stats-tooltip');
+		  const currencyBtns = document.querySelectorAll('.stats-currency-btn');
 
 		  let currentRange = null;
+		  let currentCurrency = 'UAH';
 
 		  function formatAmount(value) {
 			  return new Intl.NumberFormat('uk-UA', { maximumFractionDigits: 0 }).format(value);
+		  }
+
+		  function getCurrencySymbol() {
+			  return currentCurrency === 'USD' ? '$' : '₴';
 		  }
 
 		  function formatDateFull(iso) {
@@ -1218,6 +1228,7 @@
 
 			  // Сортуємо по датам в порядку спадання (новіші дні першими)
 			  const sortedExpenseDaily = [...expenseDaily].reverse();
+			  const currencySymbol = getCurrencySymbol();
 
 			  sortedExpenseDaily.forEach((point, index) => {
 				  const incomePoint = incomeDaily.find(p => p.date === point.date) || { amount: 0 };
@@ -1227,11 +1238,11 @@
 				  dateCell.textContent = formatDateFull(point.date);
 
 				  const expenseCell = document.createElement('td');
-				  expenseCell.textContent = `${formatAmount(point.amount)} ₴`;
+				  expenseCell.textContent = `${formatAmount(point.amount)} ${currencySymbol}`;
 				  expenseCell.className = 'stats-table__expense';
 
 				  const incomeCell = document.createElement('td');
-				  incomeCell.textContent = `${formatAmount(incomePoint.amount)} ₴`;
+				  incomeCell.textContent = `${formatAmount(incomePoint.amount)} ${currencySymbol}`;
 				  incomeCell.className = 'stats-table__income';
 
 				  tr.append(dateCell, expenseCell, incomeCell);
@@ -1256,6 +1267,7 @@
 			  emptyEl.hidden = true;
 
 			  const max = top[0].amount;
+			  const currencySymbol = getCurrencySymbol();
 
 			  top.forEach((item) => {
 				  const row = document.createElement('div');
@@ -1270,7 +1282,7 @@
 
 				  const value = document.createElement('span');
 				  value.className = 'cat-row__value';
-				  value.textContent = `${formatAmount(item.amount)} ₴`;
+				  value.textContent = `${formatAmount(item.amount)} ${currencySymbol}`;
 
 				  topLine.append(name, value);
 
@@ -1291,13 +1303,14 @@
 			  periodLabel.textContent =
 				  `${formatDateFull(data.start)} – ${formatDateFull(data.end)} · ${data.expense.daily.length} дн.`;
 
-			  document.getElementById('stats-total-expense').textContent = `${formatAmount(data.expense.total)} ₴`;
-			  document.getElementById('stats-total-income').textContent = `${formatAmount(data.income.total)} ₴`;
+			  const currencySymbol = getCurrencySymbol();
+			  document.getElementById('stats-total-expense').textContent = `${formatAmount(data.expense.total)} ${currencySymbol}`;
+			  document.getElementById('stats-total-income').textContent = `${formatAmount(data.income.total)} ${currencySymbol}`;
 
 			  const diffEl = document.getElementById('stats-difference');
 			  const diff = data.difference;
 			  const sign = diff > 0 ? '+' : (diff < 0 ? '−' : '');
-			  diffEl.textContent = `${sign}${formatAmount(Math.abs(diff))} ₴`;
+			  diffEl.textContent = `${sign}${formatAmount(Math.abs(diff))} ${currencySymbol}`;
 			  diffEl.classList.remove('stats-kpi__value--income', 'stats-kpi__value--expense');
 			  if (diff > 0) diffEl.classList.add('stats-kpi__value--income');
 			  if (diff < 0) diffEl.classList.add('stats-kpi__value--expense');
@@ -1316,7 +1329,7 @@
 			  errorBox.hidden = true;
 
 			  try {
-				  const response = await fetch(`/stats?start=${start}&end=${end}`);
+				  const response = await fetch(`/stats?start=${start}&end=${end}&currency=${currentCurrency}`);
 				  const data = await response.json();
 				  if (!response.ok) {
 					  throw new Error(data.error || 'Не вдалося завантажити статистику');
@@ -1358,6 +1371,21 @@
 			  const wrap = document.getElementById('stats-table-wrap');
 			  wrap.hidden = !wrap.hidden;
 			  e.target.textContent = wrap.hidden ? 'Показати таблицею' : 'Приховати таблицю';
+		  });
+
+		  currencyBtns.forEach((btn) => {
+			  btn.addEventListener('click', () => {
+				  const newCurrency = btn.dataset.currency;
+				  if (newCurrency === currentCurrency) return;
+
+				  currentCurrency = newCurrency;
+				  currencyBtns.forEach((b) => b.classList.remove('stats-currency-btn--active'));
+				  btn.classList.add('stats-currency-btn--active');
+
+				  if (currentRange) {
+					  fetchStats(currentRange.start, currentRange.end);
+				  }
+			  });
 		  });
 
 		  function openStats() {
