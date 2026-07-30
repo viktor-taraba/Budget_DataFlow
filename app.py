@@ -60,6 +60,29 @@ def worksheet_for(entry_type: str) -> str:
     return WORKSHEET_INCOME if entry_type == "income" else WORKSHEET_EXPENSE
 
 
+def _amount_for_sheet(value):
+    """
+    Готує суму до запису: кома як десятковий роздільник.
+
+    Один хелпер для append_row і update_row — інакше дописані й відредаговані
+    рядки лежать у таблиці в різних форматах ("100,0" проти "100.0"), і
+    відпечаток, знятий зі сторінки, перестає збігатися з рядком.
+    """
+    if isinstance(value, (int, float)):
+        return str(value).replace(".", ",")
+    return value
+
+
+# Діапазон рядка для ws.update(): рівно стільки стовпців, скільки в COLUMN_ORDER.
+_LAST_COLUMN = chr(ord("A") + len(COLUMN_ORDER) - 1)
+
+
+def _write_row(ws, row_number: int, entry: dict):
+    """Перезаписує рядок аркуша значеннями entry за порядком COLUMN_ORDER."""
+    values = [entry.get(col, "") for col in COLUMN_ORDER]
+    ws.update([values], f"A{row_number}:{_LAST_COLUMN}{row_number}", value_input_option="USER_ENTERED")
+
+
 def append_row(entry_type: str, row: dict, split_info=None):
     """
     Дописує один або кілька рядків до аркуша.
@@ -92,21 +115,11 @@ def append_row(entry_type: str, row: dict, split_info=None):
             row_data["split_id"] = split_id
             row_data["split_info"] = split_info_json
 
-            values = []
-            for col in COLUMN_ORDER:
-                val = row_data.get(col, "")
-                if col == "amount" and val and isinstance(val, (int, float)):
-                    val = str(val).replace(".", ",")
-                values.append(val)
-            ws.append_row(values, value_input_option="USER_ENTERED")
+            row_data["amount"] = _amount_for_sheet(row_data["amount"])
+            ws.append_row([row_data.get(col, "") for col in COLUMN_ORDER], value_input_option="USER_ENTERED")
     else:
-        values = []
-        for col in COLUMN_ORDER:
-            val = row.get(col, "")
-            if col == "amount" and val and isinstance(val, (int, float)):
-                val = str(val).replace(".", ",")
-            values.append(val)
-        ws.append_row(values, value_input_option="USER_ENTERED")
+        row_data = {**row, "amount": _amount_for_sheet(row.get("amount", ""))}
+        ws.append_row([row_data.get(col, "") for col in COLUMN_ORDER], value_input_option="USER_ENTERED")
 
 
 def _row_to_entry(row) -> dict:
@@ -182,7 +195,11 @@ def _group_split_entries(entries):
             result.append(grouped[key])
         else:
             split_group = grouped[key]
-            split_entries = split_group["split_entries"]
+            # `entries` іде найновішими вперед, тому рядки розбивки прийшли сюди
+            # в зворотному порядку. Повертаємо порядок аркуша: модалка
+            # редагування показує категорії так само, як вони лежать у таблиці,
+            # і update_row не перевертає їх місцями при кожному збереженні.
+            split_entries = sorted(split_group["split_entries"], key=lambda e: e.get("row_number", 0))
 
             first_entry = split_entries[0]
             categories = " + ".join(e.get("category", "Інше") for e in split_entries)
@@ -299,22 +316,51 @@ def row_fingerprint(entry: dict) -> list:
     return [str(entry.get(col, "")) for col in FINGERPRINT_COLUMNS]
 
 
+def _split_rows(ws, split_id: str) -> list:
+    """Усі рядки розбивки за split_id, у порядку аркуша: [(row_number, entry), ...]."""
+    return [
+        (offset + 2, entry)
+        for offset, entry in enumerate(_all_entries(ws.get_all_values()))
+        if entry.get("split_id", "").strip() == split_id
+    ]
+
+
+def _split_fingerprint_matches(rows: list, expected_fingerprint: list) -> bool:
+    """
+    Звіряє відпечаток зі сторінки з рядками розбивки.
+
+    Для розбивки номер рядка — ненадійний ідентифікатор: досить будь-якої
+    вставки чи видалення вище в таблиці (у тому числі вручну), і рядок за цим
+    номером — вже інший запис. А от split_id — UUID, який ніколи не вкаже на
+    чужу операцію, тому рядки шукаємо саме за ним.
+
+    Відпечаток лишається захистом «запис не змінився з моменту рендеру
+    сторінки». Сторінка несе відпечаток одного конкретного рядка розбивки
+    (див. recent_item у index.html), тому достатньо збігу з будь-яким рядком
+    групи — інакше зсув нумерації назавжди блокував би видалення й
+    редагування, скільки б сторінку не оновлювали.
+    """
+    expected = list(expected_fingerprint)
+    return any(row_fingerprint(entry) == expected for _, entry in rows)
+
+
 def delete_row(ws_name: str, row_number: int, expected_fingerprint: list, entry_type: str = None, split_id: str = None) -> bool:
     """
     Видаляє рядок(и) з аркуша, але лише якщо дані досі збігаються.
-
-    Якщо split_id передано:
-    - Знаходить всі рядки з цим split_id
-    - Видаляє всі (розбивка видаляється як одна операція)
-    - Архівує всі до листа DELETED
-
-    Якщо split_id не передано:
-    - Видаляє один рядок як раніше (назад сумісно)
 
     Сторінка могла бути відкрита давно, а таблиця за цей час — змінитися
     (додали або видалили записи, і номери рядків зсунулись). Тому перед
     видаленням перечитуємо рядок(и) і звіряємо с тим, що був(и) на сторінці.
     Якщо не збігається — не видаляємо нічого і повертаємо False.
+
+    Якщо split_id передано:
+    - Знаходить усі рядки розбивки за split_id (row_number ігнорується — див.
+      _split_fingerprint_matches), звіряє відпечаток з ними
+    - Видаляє всі (розбивка видаляється як одна операція)
+    - Архівує всі до листа DELETED
+
+    Якщо split_id не передано:
+    - Видаляє один рядок за row_number як раніше (назад сумісно)
     """
     if not any(expected_fingerprint):
         return False
@@ -324,19 +370,10 @@ def delete_row(ws_name: str, row_number: int, expected_fingerprint: list, entry_
     ws = sheet.worksheet(ws_name)
 
     if split_id:
-        all_values = ws.get_all_values()
-        all_entries = _all_entries(all_values)
-
-        rows_to_delete = []
-        for offset, entry in enumerate(all_entries):
-            if entry.get("split_id", "").strip() == split_id:
-                rows_to_delete.append((offset + 2, entry))
-
+        rows_to_delete = _split_rows(ws, split_id)
         if not rows_to_delete:
             return False
-
-        current = _row_to_entry(ws.row_values(row_number))
-        if row_fingerprint(current) != list(expected_fingerprint):
+        if not _split_fingerprint_matches(rows_to_delete, expected_fingerprint):
             return False
 
         if entry_type:
@@ -374,14 +411,16 @@ def update_row(ws_name: str, row_number: int, expected_fingerprint: list, update
     Оновлює рядок(и) в аркуші, але лише якщо дані досі збігаються.
 
     Якщо split_id передано:
-    - Знаходить всі рядки з цим split_id
-    - Якщо split_breakdown також передано: оновлює кожен рядок з новою категорією/сумою з split_breakdown
-    - Якщо split_breakdown не передано: оновлює всі рядки splits з переданими updates (date, note, etc)
+    - Знаходить усі рядки розбивки за split_id (row_number ігнорується — див.
+      _split_fingerprint_matches), звіряє відпечаток з ними
+    - Якщо split_breakdown також передано: переписує рядки під нову розбивку,
+      видаляючи зайві й дописуючи нові, якщо кількість категорій змінилась
+    - Якщо split_breakdown не передано: оновлює всі рядки розбивки переданими updates (date, note, ...)
     - Оновлює split_info якщо split_breakdown передано
     - updated_at встановлюється для всіх
 
     Якщо split_id не передано:
-    - Оновлює один рядок як раніше (назад сумісно)
+    - Оновлює один рядок за row_number як раніше (назад сумісно)
 
     updates: dict з ключами, які потрібно змінити (date, category, amount, note).
     Системні поля (submitted_at, added_at, device_info) не змінюються.
@@ -395,38 +434,49 @@ def update_row(ws_name: str, row_number: int, expected_fingerprint: list, update
     ws = sheet.worksheet(ws_name)
 
     if split_id:
-        all_values = ws.get_all_values()
-        all_entries = _all_entries(all_values)
-
-        rows_to_update = []
-        for offset, entry in enumerate(all_entries):
-            if entry.get("split_id", "").strip() == split_id:
-                rows_to_update.append((offset + 2, entry))
-
+        rows_to_update = _split_rows(ws, split_id)
         if not rows_to_update:
             return False
-
-        current = _row_to_entry(ws.row_values(row_number))
-        if row_fingerprint(current) != list(expected_fingerprint):
+        if not _split_fingerprint_matches(rows_to_update, expected_fingerprint):
             return False
 
         if split_breakdown:
             total_amount = sum(item["amount"] for item in split_breakdown)
-            split_info_json = json.dumps({
+            updates["split_info"] = json.dumps({
                 "total": round(total_amount, 2),
                 "categories": split_breakdown
             }, ensure_ascii=False)
-            updates["split_info"] = split_info_json
 
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-        for idx, (row_num, entry) in enumerate(rows_to_update):
-            updated_entry = {**entry, **updates}
-            if split_breakdown and idx < len(split_breakdown):
-                updated_entry["category"] = split_breakdown[idx]["category"]
-                updated_entry["amount"] = split_breakdown[idx]["amount"]
-            values = [updated_entry.get(col, "") for col in COLUMN_ORDER]
-            ws.update(f'A{row_num}:Z{row_num}', [values])
+        if not split_breakdown:
+            for row_num, entry in rows_to_update:
+                _write_row(ws, row_num, {**entry, **updates})
+            return True
+
+        # Кількість категорій могла змінитись: перші рядки переписуємо на місці,
+        # зайві — видаляємо, а нові — дописуємо. Без цього рядки старої розбивки
+        # лишались би в таблиці як «сироти» з тим самим split_id.
+        for idx, (row_num, entry) in enumerate(rows_to_update[:len(split_breakdown)]):
+            _write_row(ws, row_num, {
+                **entry,
+                **updates,
+                "category": split_breakdown[idx]["category"],
+                "amount": _amount_for_sheet(split_breakdown[idx]["amount"]),
+            })
+
+        surplus = rows_to_update[len(split_breakdown):]
+        for row_num, _ in sorted(surplus, key=lambda item: item[0], reverse=True):
+            ws.delete_rows(row_num)
+
+        template = {**rows_to_update[0][1], **updates}
+        for item in split_breakdown[len(rows_to_update):]:
+            new_entry = {
+                **template,
+                "category": item["category"],
+                "amount": _amount_for_sheet(item["amount"]),
+            }
+            ws.append_row([new_entry.get(col, "") for col in COLUMN_ORDER], value_input_option="USER_ENTERED")
 
         return True
     else:
@@ -435,9 +485,7 @@ def update_row(ws_name: str, row_number: int, expected_fingerprint: list, update
             return False
 
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-        updated_entry = {**current, **updates}
-        values = [updated_entry.get(col, "") for col in COLUMN_ORDER]
-        ws.update(f'A{row_number}:Z{row_number}', [values])
+        _write_row(ws, row_number, {**current, **updates})
         return True
 
 
@@ -807,7 +855,7 @@ def edit():
         updates = {
             "date": entry_date,
             "category": category,
-            "amount": str(amount).replace(".", ","),
+            "amount": _amount_for_sheet(amount),
             "note": note,
         }
 
