@@ -29,11 +29,27 @@ APP_PASSWORD = os.environ["APP_PASSWORD"]
 def load_categories():
     try:
         with open("categories.json", "r", encoding="utf-8") as f:
-            return json.load(f)
+            categories = json.load(f)
+            categories.setdefault("expense", [])
+            categories.setdefault("income", [])
+            subcategories = categories.setdefault("subcategories", {})
+            subcategories.setdefault("expense", {})
+            subcategories.setdefault("income", {})
+            return categories
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"expense": [], "income": []}
+        return {"expense": [], "income": [], "subcategories": {"expense": {}, "income": {}}}
 
 CATEGORIES = load_categories()
+
+
+def subcategories_for(entry_type: str, category: str) -> list:
+    """Повертає підкатегорії, доступні для заданої категорії."""
+    return CATEGORIES.get("subcategories", {}).get(entry_type, {}).get(category, [])
+
+
+def subcategory_is_valid(entry_type: str, category: str, subcategory: str) -> bool:
+    """Порожня підкатегорія допустима; непорожня має належати категорії."""
+    return not subcategory or subcategory in subcategories_for(entry_type, category)
 
 # Render (і більшість хостингів) стоїть за проксі: без цього request.remote_addr завжди буде адресою проксі, а не клієнта,
 # і rate-limit нижче рахуватиме всіх користувачів як одного.
@@ -116,6 +132,15 @@ def _write_row(ws, row_number: int, entry: dict):
     ws.update([values], f"A{row_number}:{_LAST_COLUMN}{row_number}", value_input_option="USER_ENTERED")
 
 
+def _ensure_subcategory_header(ws, columns):
+    """Дописує заголовок нового поля лише до аркушів старої структури."""
+    if not hasattr(ws, "update_cell"):
+        return
+    header = ws.row_values(1)
+    if len(header) < len(columns):
+        ws.update_cell(1, len(columns), "subcategory")
+
+
 def append_row(entry_type: str, row: dict, split_info=None):
     """
     Дописує один або кілька рядків до аркуша.
@@ -132,6 +157,7 @@ def append_row(entry_type: str, row: dict, split_info=None):
     client = get_client()
     sheet = client.open_by_key(SHEET_ID)
     ws = sheet.worksheet(worksheet_for(entry_type))
+    _ensure_subcategory_header(ws, COLUMN_ORDER)
 
     if split_info:
         split_id = str(uuid.uuid4())
@@ -456,6 +482,7 @@ def delete_row(ws_name: str, row_number: int, expected_fingerprint: list, entry_
 
         if entry_type:
             deleted_ws = sheet.worksheet(WORKSHEET_DELETED)
+            _ensure_subcategory_header(deleted_ws, DELETED_COLUMN_ORDER)
             for _, entry in rows_to_delete:
                 deleted_entry = {**entry}
                 deleted_entry["deleted_at"] = datetime.now(timezone.utc).isoformat()
@@ -474,6 +501,7 @@ def delete_row(ws_name: str, row_number: int, expected_fingerprint: list, entry_
 
         if entry_type:
             deleted_ws = sheet.worksheet(WORKSHEET_DELETED)
+            _ensure_subcategory_header(deleted_ws, DELETED_COLUMN_ORDER)
             deleted_entry = {**current}
             deleted_entry["deleted_at"] = datetime.now(timezone.utc).isoformat()
             deleted_entry["income_or_expense"] = "income" if entry_type == "income" else "expense"
@@ -540,6 +568,7 @@ def update_row(ws_name: str, row_number: int, expected_fingerprint: list, update
                 **entry,
                 **updates,
                 "category": split_breakdown[idx]["category"],
+                "subcategory": split_breakdown[idx].get("subcategory", ""),
                 "amount": _amount_for_sheet(split_breakdown[idx]["amount"]),
             })
 
@@ -552,6 +581,7 @@ def update_row(ws_name: str, row_number: int, expected_fingerprint: list, update
             new_entry = {
                 **template,
                 "category": item["category"],
+                "subcategory": item.get("subcategory", ""),
                 "amount": _amount_for_sheet(item["amount"]),
             }
             ws.append_row([new_entry.get(col, "") for col in COLUMN_ORDER], value_input_option="USER_ENTERED")
@@ -624,11 +654,11 @@ def validate_row_number(raw):
     return value if value >= 2 else None
 
 
-def validate_split(category_amount_pairs, total_amount):
+def validate_split(category_amount_pairs, total_amount, entry_type: str = "expense"):
     """
     Валідує розбивку суми на кілька категорій.
 
-    category_amount_pairs: list of dicts {"category": str, "amount": float or str}.
+    category_amount_pairs: list of dicts з category, optional subcategory та amount.
     total_amount: float — загальна сума, яку потрібно розбити.
 
     Правила:
@@ -652,7 +682,13 @@ def validate_split(category_amount_pairs, total_amount):
 
     for pair in category_amount_pairs[:-1]:
         category = pair["category"]
+        subcategory = pair.get("subcategory", "").strip()
         amount_str = pair["amount"]
+
+        if not category:
+            return False, "Оберіть категорію для кожної частини", None
+        if not subcategory_is_valid(entry_type, category, subcategory):
+            return False, "Підкатегорія не належить обраній категорії", None
 
         # Якщо amount це число (з JSON), конвертуємо до рядка для validate_amount
         if isinstance(amount_str, (int, float)):
@@ -661,7 +697,7 @@ def validate_split(category_amount_pairs, total_amount):
         validated = validate_amount(amount_str)
         if validated is None:
             return False, f"Невірна сума для категорії '{category}'", None
-        split_rows.append({"category": category, "amount": validated})
+        split_rows.append({"category": category, "subcategory": subcategory, "amount": validated})
         sum_entered += validated
 
     if sum_entered >= total_amount:
@@ -672,7 +708,12 @@ def validate_split(category_amount_pairs, total_amount):
         return False, f"Остаток занадто малий ({remainder}). Перевірте суми.", None
 
     last_category = category_amount_pairs[-1]["category"]
-    split_rows.append({"category": last_category, "amount": remainder})
+    last_subcategory = category_amount_pairs[-1].get("subcategory", "").strip()
+    if not last_category:
+        return False, "Оберіть категорію для останньої частини", None
+    if not subcategory_is_valid(entry_type, last_category, last_subcategory):
+        return False, "Підкатегорія не належить обраній категорії", None
+    split_rows.append({"category": last_category, "subcategory": last_subcategory, "amount": remainder})
 
     return True, None, split_rows
 
@@ -746,6 +787,7 @@ def submit():
     entry_type = request.form.get("type")
     amount = validate_amount(request.form.get("amount"))
     category = request.form.get("category", "").strip()
+    subcategory = request.form.get("subcategory", "").strip()
     entry_date_raw = request.form.get("date") or date.today().isoformat()
     entry_date = validate_date(entry_date_raw)
     note = request.form.get("note", "").strip()
@@ -766,7 +808,7 @@ def submit():
     if split_breakdown_json and entry_type == "expense":
         try:
             split_breakdown = json.loads(split_breakdown_json)
-            is_valid, error_msg, split_rows = validate_split(split_breakdown, amount)
+            is_valid, error_msg, split_rows = validate_split(split_breakdown, amount, entry_type)
             if not is_valid:
                 flash(error_msg or "Помилка валідації розбивки")
                 return redirect(url_for("index"))
@@ -777,6 +819,7 @@ def submit():
         row = {
             "date": entry_date,
             "category": "",
+            "subcategory": "",
             "amount": amount,
             "note": note,
             "submitted_at": request.form.get("submitted_at", ""),
@@ -795,6 +838,8 @@ def submit():
     else:
         if not category:
             error = "Оберіть категорію"
+        elif not subcategory_is_valid(entry_type, category, subcategory):
+            error = "Підкатегорія не належить обраній категорії"
         if error:
             flash(error)
             return redirect(url_for("index"))
@@ -802,6 +847,7 @@ def submit():
         row = {
             "date": entry_date,
             "category": category,
+            "subcategory": subcategory,
             "amount": amount,
             "note": note,
             "submitted_at": request.form.get("submitted_at", ""),
@@ -894,7 +940,7 @@ def edit():
         try:
             split_breakdown = json.loads(split_breakdown_json)
             total_amount = sum(item["amount"] for item in split_breakdown)
-            is_valid, error_msg, _ = validate_split(split_breakdown, total_amount)
+            is_valid, error_msg, _ = validate_split(split_breakdown, total_amount, entry_type)
             if not is_valid:
                 flash(error_msg or "Помилка валідації розбивки")
                 return redirect(url_for("index"))
@@ -922,6 +968,7 @@ def edit():
     else:
         amount = validate_amount(request.form.get("amount"))
         category = request.form.get("category", "").strip()
+        subcategory = request.form.get("subcategory", "").strip()
 
         if amount is None:
             flash("Сума повинна бути числом")
@@ -929,10 +976,14 @@ def edit():
         if not category:
             flash("Виберіть категорію")
             return redirect(url_for("index"))
+        if not subcategory_is_valid(entry_type, category, subcategory):
+            flash("Підкатегорія не належить обраній категорії")
+            return redirect(url_for("index"))
 
         updates = {
             "date": entry_date,
             "category": category,
+            "subcategory": subcategory,
             "amount": _amount_for_sheet(amount),
             "note": note,
         }
@@ -1085,6 +1136,7 @@ def delete_category():
         return jsonify({"error": "Категорія не знайдена"}), 404
 
     CATEGORIES[entry_type].remove(category_name)
+    CATEGORIES["subcategories"][entry_type].pop(category_name, None)
     save_categories()
     return jsonify({"success": True, "categories": CATEGORIES})
 
@@ -1107,6 +1159,72 @@ def rename_category():
 
     idx = CATEGORIES[entry_type].index(old_name)
     CATEGORIES[entry_type][idx] = new_name
+    children = CATEGORIES["subcategories"][entry_type].pop(old_name, None)
+    if children is not None:
+        CATEGORIES["subcategories"][entry_type][new_name] = children
+    save_categories()
+    return jsonify({"success": True, "categories": CATEGORIES})
+
+
+def _subcategory_request_data():
+    data = request.get_json(silent=True) or {}
+    entry_type = data.get("type")
+    category = str(data.get("category", "")).strip()
+    name = str(data.get("name", "")).strip()
+    return entry_type, category, name
+
+
+@app.route("/subcategories/add", methods=["POST"])
+@login_required
+def add_subcategory():
+    entry_type, category, name = _subcategory_request_data()
+    if entry_type not in ("income", "expense") or category not in CATEGORIES[entry_type]:
+        return jsonify({"error": "Некоректна категорія"}), 400
+    if not name:
+        return jsonify({"error": "Назва підкатегорії не може бути порожньою"}), 400
+
+    all_subcategories = CATEGORIES["subcategories"][entry_type]
+    if any(name in values for values in all_subcategories.values()):
+        return jsonify({"error": "Така підкатегорія вже належить іншій категорії"}), 409
+
+    all_subcategories.setdefault(category, []).append(name)
+    save_categories()
+    return jsonify({"success": True, "categories": CATEGORIES})
+
+
+@app.route("/subcategories/delete", methods=["POST"])
+@login_required
+def delete_subcategory():
+    entry_type, category, name = _subcategory_request_data()
+    children = CATEGORIES.get("subcategories", {}).get(entry_type, {}).get(category, [])
+    if entry_type not in ("income", "expense") or name not in children:
+        return jsonify({"error": "Підкатегорія не знайдена"}), 404
+
+    children.remove(name)
+    if not children:
+        CATEGORIES["subcategories"][entry_type].pop(category, None)
+    save_categories()
+    return jsonify({"success": True, "categories": CATEGORIES})
+
+
+@app.route("/subcategories/rename", methods=["POST"])
+@login_required
+def rename_subcategory():
+    data = request.get_json(silent=True) or {}
+    entry_type = data.get("type")
+    category = str(data.get("category", "")).strip()
+    old_name = str(data.get("old_name", "")).strip()
+    new_name = str(data.get("new_name", "")).strip()
+    children = CATEGORIES.get("subcategories", {}).get(entry_type, {}).get(category, [])
+
+    if entry_type not in ("income", "expense") or old_name not in children:
+        return jsonify({"error": "Підкатегорія не знайдена"}), 404
+    if not new_name:
+        return jsonify({"error": "Назва підкатегорії не може бути порожньою"}), 400
+    if any(new_name in values for values in CATEGORIES["subcategories"][entry_type].values()):
+        return jsonify({"error": "Така підкатегорія вже належить іншій категорії"}), 409
+
+    children[children.index(old_name)] = new_name
     save_categories()
     return jsonify({"success": True, "categories": CATEGORIES})
 

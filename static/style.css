@@ -900,6 +900,9 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
   max-height: 300px;
   overflow-y: auto;
 }
+.subcategories-manager { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.categories-manager__title { margin-bottom: 8px; color: var(--ink); font-size: 14px; font-weight: 600; }
+.subcategories-manager > .categories-input { width: 100%; margin-bottom: 8px; }
 
 .categories-item {
   display: flex;
