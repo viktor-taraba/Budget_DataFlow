@@ -65,6 +65,13 @@
       </div>
 
       <div class="field">
+        <label class="field-label" for="subcategory">Підкатегорія (необов'язково)</label>
+        <select id="subcategory" name="subcategory" disabled>
+          <option value="">Без підкатегорії</option>
+        </select>
+      </div>
+
+      <div class="field">
         <label class="field-label" for="date">Дата</label>
         <input type="date" id="date" name="date" value="{{ today }}" max="{{ today }}" required>
       </div>
@@ -104,11 +111,11 @@
 			{{ entry.date[8:10] }}.{{ entry.date[5:7] }} ·
 			{% if entry.split_count %}
 				<span class="recent-item__split-summary">
-					{{ entry.category }}
+					{{ entry.category }}{% if entry.subcategory %} · {{ entry.subcategory }}{% endif %}
 					<button type="button" class="recent-split-expand" aria-label="Розгорнути деталі розбивки" title="Розгорнути деталі розбивки">▼</button>
 				</span>
 			{% else %}
-				{{ entry.category }}
+				{{ entry.category }}{% if entry.subcategory %} · {{ entry.subcategory }}{% endif %}
 			{% endif %}
 		</span>
 		<span class="recent-item__right">
@@ -119,6 +126,7 @@
 					data-edit-type="{{ kind }}"
 					data-edit-date="{{ entry.date }}"
 					data-edit-category="{% if entry.split_count %}{{ entry.split_entries[0].category }}{% else %}{{ entry.category }}{% endif %}"
+					data-edit-subcategory="{% if entry.split_count %}{{ entry.split_entries[0].subcategory }}{% else %}{{ entry.subcategory }}{% endif %}"
 					data-edit-amount="{% if entry.split_count %}{{ entry.split_entries[0].amount }}{% else %}{{ entry.amount }}{% endif %}"
 					data-edit-note="{{ entry.note }}"
 					data-edit-fp-date="{{ entry.date }}"
@@ -146,7 +154,7 @@
 	{% if entry.split_count %}
 		<li class="recent-split-details" hidden>
 			{% for split_entry in entry.split_entries %}
-				<div class="split-detail-item">{{ split_entry.category }} · {{ split_entry.amount }}</div>
+				<div class="split-detail-item">{{ split_entry.category }}{% if split_entry.subcategory %} · {{ split_entry.subcategory }}{% endif %} · {{ split_entry.amount }}</div>
 			{% endfor %}
 		</li>
 	{% endif %}
@@ -208,6 +216,15 @@
 		</div>
 
 		<div class="categories-list" id="categories-list"></div>
+		<div class="subcategories-manager">
+		  <div class="categories-manager__title">Підкатегорії</div>
+		  <select id="subcategory-parent" class="categories-input" aria-label="Категорія для підкатегорії"></select>
+		  <div class="categories-add">
+			<input type="text" id="subcategory-input" class="categories-input" placeholder="Нова підкатегорія (наприклад: 🎬 Кіно)">
+			<button type="button" id="subcategory-add-btn" class="categories-add-btn">Додати</button>
+		  </div>
+		  <div class="categories-list" id="subcategories-list"></div>
+		</div>
 		<div class="categories-error" id="categories-error" hidden></div>
 	  </div>
 	</div>
@@ -238,6 +255,13 @@
 		  <label for="edit-category">Категорія</label>
 		  <select id="edit-category" name="category" required>
 			<option value="">Виберіть категорію</option>
+		  </select>
+		</div>
+
+		<div class="form-group" id="edit-subcategory-group">
+		  <label for="edit-subcategory">Підкатегорія (опціонально)</label>
+		  <select id="edit-subcategory" name="subcategory" disabled>
+			<option value="">Без підкатегорії</option>
 		  </select>
 		</div>
 
@@ -400,8 +424,10 @@
 	  expense: {{ categories.expense | tojson }},
 	  income: {{ categories.income | tojson }}
 	  };
+	  const subcategories = {{ categories.get('subcategories', {'expense': {}, 'income': {}}) | tojson }};
 
 	  const select = document.getElementById('category');
+	  const subcategorySelect = document.getElementById('subcategory');
 	  const radios = document.querySelectorAll('input[name="type"]');
 
 	  function fillCategories(type) {
@@ -414,8 +440,26 @@
 	  });
 	  }
 
-	  radios.forEach((r) => r.addEventListener('change', (e) => fillCategories(e.target.value)));
-	  fillCategories(document.querySelector('input[name="type"]:checked').value);
+	  function fillSubcategories(type, category) {
+	  const values = (subcategories[type] || {})[category] || [];
+	  subcategorySelect.innerHTML = '<option value="">Без підкатегорії</option>';
+	  values.forEach((subcategory) => {
+		const opt = document.createElement('option');
+		opt.value = subcategory;
+		opt.textContent = subcategory;
+		subcategorySelect.appendChild(opt);
+	  });
+	  subcategorySelect.disabled = values.length === 0;
+	  }
+
+	  radios.forEach((r) => r.addEventListener('change', (e) => {
+		fillCategories(e.target.value);
+		fillSubcategories(e.target.value, select.value);
+	  }));
+	  select.addEventListener('change', () => fillSubcategories(document.querySelector('input[name="type"]:checked').value, select.value));
+	  const initialType = document.querySelector('input[name="type"]:checked').value;
+	  fillCategories(initialType);
+	  fillSubcategories(initialType, select.value);
 
 	  // Фіксуємо момент, коли користувач фактично натиснув "Зберегти", а не коли відкрив сторінку.
 	  // Валідація перед відправкою — щоб не чекати round-trip до сервера
@@ -448,7 +492,8 @@
 			const breakdown = [];
 			let validSplit = true;
 			pairs.forEach((pair, idx) => {
-			  const catSelect = pair.querySelector('select');
+			  const catSelect = pair.querySelector('.split-category');
+			  const subcategory = pair.querySelector('.split-subcategory').value.trim();
 			  const amountInput = pair.querySelector('input[type="text"]');
 			  const category = catSelect.value.trim();
 			  const amount = idx === pairs.length - 1 ? '' : amountInput.value.trim();
@@ -471,9 +516,9 @@
 				  validSplit = false;
 				  return;
 				}
-				breakdown.push({ category, amount: parsed });
+				breakdown.push({ category, subcategory, amount: parsed });
 			  } else {
-				breakdown.push({ category, amount: '' });
+				breakdown.push({ category, subcategory, amount: '' });
 			  }
 			});
 
@@ -609,6 +654,23 @@
 			  opt.textContent = cat;
 			  catSelect.appendChild(opt);
 			});
+			const subcategoryLabel = document.createElement('label');
+			subcategoryLabel.textContent = 'Підкатегорія';
+			const subcategorySelect = document.createElement('select');
+			subcategorySelect.className = 'split-subcategory';
+			function fillPairSubcategories() {
+			  const values = (subcategories.expense || {})[catSelect.value] || [];
+			  subcategorySelect.innerHTML = '<option value="">Без підкатегорії</option>';
+			  values.forEach((subcategory) => {
+				const option = document.createElement('option');
+				option.value = subcategory;
+				option.textContent = subcategory;
+				subcategorySelect.appendChild(option);
+			  });
+			  subcategorySelect.disabled = values.length === 0;
+			}
+			catSelect.addEventListener('change', fillPairSubcategories);
+			fillPairSubcategories();
 
 			const amountLabel = document.createElement('label');
 			const amountInput = document.createElement('input');
@@ -640,7 +702,7 @@
 			  recalculateRemainder();
 			});
 
-			pair.append(catLabel, catSelect, amountLabel, amountInput);
+			pair.append(catLabel, catSelect, subcategoryLabel, subcategorySelect, amountLabel, amountInput);
 			if (i < pairCount - 1) {
 			  pair.appendChild(removeBtn);
 			}
@@ -684,6 +746,10 @@
 		  const input = document.getElementById('category-input');
 		  const addBtn = document.getElementById('category-add-btn');
 		  const list = document.getElementById('categories-list');
+		  const subcategoryParent = document.getElementById('subcategory-parent');
+		  const subcategoryInput = document.getElementById('subcategory-input');
+		  const subcategoryAddBtn = document.getElementById('subcategory-add-btn');
+		  const subcategoriesList = document.getElementById('subcategories-list');
 		  const error = document.getElementById('categories-error');
 
 		  let currentType = 'expense';
@@ -738,6 +804,64 @@
 				  item.append(span, btns);
 				  list.appendChild(item);
 			  });
+			  renderSubcategoryParent();
+		  }
+
+		  function renderSubcategoryParent() {
+			  const selected = subcategoryParent.value;
+			  subcategoryParent.innerHTML = '<option value="">Оберіть категорію</option>';
+			  (categories[currentType] || []).forEach((category) => {
+				  const option = document.createElement('option');
+				  option.value = category;
+				  option.textContent = category;
+				  subcategoryParent.appendChild(option);
+			  });
+			  if ((categories[currentType] || []).includes(selected)) subcategoryParent.value = selected;
+			  renderSubcategories();
+		  }
+
+		  function renderSubcategories() {
+			  subcategoriesList.innerHTML = '';
+			  const parent = subcategoryParent.value;
+			  const items = (((categories.subcategories || {})[currentType] || {})[parent] || []);
+			  items.forEach((name) => {
+				  const item = document.createElement('div');
+				  item.className = 'categories-item';
+				  const span = document.createElement('span');
+				  span.className = 'categories-item__name';
+				  span.textContent = name;
+				  const actions = document.createElement('div');
+				  actions.className = 'categories-item__actions';
+				  const edit = document.createElement('button');
+				  edit.type = 'button'; edit.className = 'categories-item__btn categories-item__btn--edit'; edit.textContent = '✏️';
+				  edit.addEventListener('click', () => renameSubcategory(parent, name));
+				  const remove = document.createElement('button');
+				  remove.type = 'button'; remove.className = 'categories-item__btn categories-item__btn--delete'; remove.textContent = '✕';
+				  remove.addEventListener('click', () => deleteSubcategory(parent, name));
+				  actions.append(edit, remove); item.append(span, actions); subcategoriesList.appendChild(item);
+			  });
+		  }
+
+		  async function subcategoryRequest(path, body) {
+			  const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+			  if (!response.ok) {
+				  const data = await response.json();
+				  throw new Error(data.error || 'Помилка оновлення підкатегорії');
+			  }
+			  await loadCategories();
+		  }
+
+		  async function deleteSubcategory(category, name) {
+			  if (!confirm(`Видалити підкатегорію «${name}»?`)) return;
+			  try { await subcategoryRequest('/subcategories/delete', { type: currentType, category, name }); }
+			  catch (err) { showError(err.message); }
+		  }
+
+		  async function renameSubcategory(category, oldName) {
+			  const newName = prompt('Нова назва підкатегорії:', oldName);
+			  if (!newName || newName === oldName) return;
+			  try { await subcategoryRequest('/subcategories/rename', { type: currentType, category, old_name: oldName, new_name: newName }); }
+			  catch (err) { showError(err.message); }
 		  }
 
 		  async function deleteCategory(name) {
@@ -813,6 +937,17 @@
 			  if (e.key === 'Enter') addBtn.click();
 		  });
 
+		  subcategoryParent.addEventListener('change', renderSubcategories);
+		  subcategoryAddBtn.addEventListener('click', async () => {
+			  const category = subcategoryParent.value;
+			  const name = subcategoryInput.value.trim();
+			  if (!category || !name) { showError('Оберіть категорію та введіть назву підкатегорії'); return; }
+			  try {
+				  await subcategoryRequest('/subcategories/add', { type: currentType, category, name });
+				  subcategoryInput.value = '';
+			  } catch (err) { showError(err.message); }
+		  });
+
 		  tabs.forEach((tab) => {
 			  tab.addEventListener('click', () => {
 				  tabs.forEach((t) => t.classList.remove('is-active'));
@@ -841,13 +976,16 @@
 			  expense: {{ categories.expense | tojson }},
 			  income: {{ categories.income | tojson }}
 		  };
+		  const subcategories = {{ categories.get('subcategories', {'expense': {}, 'income': {}}) | tojson }};
 
 		  const editOverlay = document.getElementById('edit-overlay');
 		  const editForm = document.getElementById('edit-form');
 		  const editClose = document.getElementById('edit-close');
 		  const editCancel = document.getElementById('edit-cancel');
 		  const editCategorySelect = document.getElementById('edit-category');
+		  const editSubcategorySelect = document.getElementById('edit-subcategory');
 		  const editCategoryGroup = document.getElementById('edit-category-group');
+		  const editSubcategoryGroup = document.getElementById('edit-subcategory-group');
 		  const editAmountGroup = document.getElementById('edit-amount-group');
 		  const editSplitForm = document.getElementById('edit-split-form');
 		  const editSplitPairs = document.getElementById('edit-split-pairs');
@@ -865,6 +1003,19 @@
 				  option.textContent = cat;
 				  editCategorySelect.appendChild(option);
 			  });
+		  }
+
+		  function populateSubcategories(type, category, selected = '') {
+			  const items = (subcategories[type] || {})[category] || [];
+			  editSubcategorySelect.innerHTML = '<option value="">Без підкатегорії</option>';
+			  items.forEach((subcategory) => {
+				  const option = document.createElement('option');
+				  option.value = subcategory;
+				  option.textContent = subcategory;
+				  editSubcategorySelect.appendChild(option);
+			  });
+			  editSubcategorySelect.disabled = items.length === 0;
+			  editSubcategorySelect.value = selected;
 		  }
 
 		  function recalculateEditRemainder() {
@@ -892,6 +1043,7 @@
 		  function collectEditSplitPairs() {
 			  return Array.from(document.querySelectorAll('#edit-split-pairs .split-pair')).map((pair) => ({
 				  category: pair.querySelector('.split-category').value,
+				  subcategory: pair.querySelector('.split-subcategory').value,
 				  amount: pair.querySelector('.split-amount').value,
 			  }));
 		  }
@@ -918,6 +1070,23 @@
 				if (currentEditSplitEntries && currentEditSplitEntries[i] && currentEditSplitEntries[i].category) {
 				  catSelect.value = currentEditSplitEntries[i].category;
 				}
+
+				const subcategoryLabel = document.createElement('label');
+				subcategoryLabel.textContent = 'Підкатегорія';
+				const subcategorySelect = document.createElement('select');
+				subcategorySelect.className = 'split-subcategory';
+				function fillEditPairSubcategories(selected = '') {
+				  const values = (subcategories[currentEditType] || {})[catSelect.value] || [];
+				  subcategorySelect.innerHTML = '<option value="">Без підкатегорії</option>';
+				  values.forEach((subcategory) => {
+					const option = document.createElement('option'); option.value = subcategory; option.textContent = subcategory;
+					subcategorySelect.appendChild(option);
+				  });
+				  subcategorySelect.disabled = values.length === 0;
+				  subcategorySelect.value = selected;
+				}
+				catSelect.addEventListener('change', () => fillEditPairSubcategories());
+				fillEditPairSubcategories(currentEditSplitEntries && currentEditSplitEntries[i] ? currentEditSplitEntries[i].subcategory : '');
 
 				const amountLabel = document.createElement('label');
 				const amountInput = document.createElement('input');
@@ -952,7 +1121,7 @@
 				  renderEditSplitPairs(rest);
 				});
 
-				pair.append(catLabel, catSelect, amountLabel, amountInput);
+				pair.append(catLabel, catSelect, subcategoryLabel, subcategorySelect, amountLabel, amountInput);
 				if (i < pairCount - 1) {
 				  pair.appendChild(removeBtn);
 				}
@@ -967,10 +1136,12 @@
 			  editForm.reset();
 			  editSplitForm.hidden = true;
 			  editCategoryGroup.style.display = '';
+			  editSubcategoryGroup.style.display = '';
 			  editAmountGroup.style.display = '';
 			  // form.reset() не чіпає disabled — знімаємо самі, інакше наступне
 			  // редагування звичайного запису відкриється із заблокованим полем.
 			  editCategorySelect.disabled = false;
+			  editSubcategorySelect.disabled = false;
 			  editAmount.disabled = false;
 			  currentEditSplitEntries = null;
 		  }
@@ -983,9 +1154,10 @@
 			  const breakdown = [];
 			  for (const pair of pairs) {
 				const cat = pair.querySelector('.split-category').value;
+				const subcategory = pair.querySelector('.split-subcategory').value;
 				const amount = parseFloat(pair.querySelector('.split-amount').value.replace(',', '.'));
 				if (!cat || isNaN(amount) || amount <= 0) return null;
-				breakdown.push({ category: cat, amount: parseFloat(amount.toFixed(2)) });
+				breakdown.push({ category: cat, subcategory, amount: parseFloat(amount.toFixed(2)) });
 			  }
 			  return breakdown;
 		  }
@@ -1004,6 +1176,7 @@
 			  const rowNumber = editBtn.dataset.editRow;
 			  const date = editBtn.dataset.editDate;
 			  const category = editBtn.dataset.editCategory;
+			  const subcategory = editBtn.dataset.editSubcategory || '';
 			  const amount = editBtn.dataset.editAmount;
 			  const note = editBtn.dataset.editNote;
 			  const splitId = editBtn.dataset.editSplitId;
@@ -1016,15 +1189,11 @@
 				  const splitDetails = recentItem ? recentItem.nextElementSibling : null;
 				  if (splitDetails && splitDetails.classList.contains('recent-split-details')) {
 					  splitDetails.querySelectorAll('.split-detail-item').forEach(item => {
-						  const text = item.textContent.trim();
-						  const parts = text.split(' · ');
-						  if (parts.length === 2) {
-							  const category = parts[0].trim();
-							  const amount = parts[1].trim();
-							  if (category && amount) {
-								  currentEditSplitEntries.push({ category, amount });
-							  }
-						  }
+					  const parts = item.textContent.trim().split(' · ');
+					  const category = parts[0];
+					  const amount = parts.at(-1);
+					  const subcategory = parts.length === 3 ? parts[1] : '';
+					  if (category && amount) currentEditSplitEntries.push({ category, subcategory, amount });
 					  });
 				  }
 				  if (currentEditSplitEntries.length === 0) {
@@ -1050,7 +1219,9 @@
 				  // помилку на display:none полі не може — кнопка "Зберегти"
 				  // просто мовчки нічого не робила б.
 				  editCategoryGroup.style.display = 'none';
+				  editSubcategoryGroup.style.display = 'none';
 				  editCategorySelect.disabled = true;
+				  editSubcategorySelect.disabled = true;
 				  // Сума лишається видимою — це загальна сума розбивки, від якої
 				  // рахується залишок в останньому рядку.
 				  editAmountGroup.style.display = '';
@@ -1061,11 +1232,13 @@
 				  renderEditSplitPairs(currentEditSplitEntries);
 			  } else {
 				  editCategoryGroup.style.display = '';
+				  editSubcategoryGroup.style.display = '';
 				  editAmountGroup.style.display = '';
 				  editAmountLabel.textContent = 'Сума (грн)';
 				  editSplitForm.hidden = true;
 				  editCategorySelect.value = category;
 				  editCategorySelect.disabled = false;
+				  populateSubcategories(type, category, subcategory);
 				  editAmount.disabled = false;
 				  editAmount.value = amount;
 			  }
@@ -1081,9 +1254,13 @@
 			  editOverlay.hidden = false;
 		  });
 
+		  editCategorySelect.addEventListener('change', () => {
+			  populateSubcategories(currentEditType, editCategorySelect.value);
+		  });
+
 		  editSplitAddBtn.addEventListener('click', (e) => {
 			  e.preventDefault();
-			  renderEditSplitPairs(collectEditSplitPairs().concat({ category: '', amount: '' }));
+			  renderEditSplitPairs(collectEditSplitPairs().concat({ category: '', subcategory: '', amount: '' }));
 		  });
 
 		  editAmount.addEventListener('input', () => {
