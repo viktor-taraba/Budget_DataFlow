@@ -316,6 +316,25 @@
 		</div>
 
 		<div class="stats-section">
+		  <div class="stats-section__title">Порівняння за місяцями</div>
+		  <div class="monthly-chart" id="chart-monthly"></div>
+		  <div class="stats-empty" id="chart-monthly-empty" hidden>Немає даних за період</div>
+		  <div class="monthly-chart__legend" aria-label="Позначення графіка">
+			<span><i class="monthly-chart__legend-mark monthly-chart__legend-mark--income"></i>Доходи</span>
+			<span><i class="monthly-chart__legend-mark monthly-chart__legend-mark--expense"></i>Витрати</span>
+			<span><i class="monthly-chart__legend-mark monthly-chart__legend-mark--result"></i>Результат</span>
+		  </div>
+		  <div class="stats-table-wrap stats-table-wrap--monthly">
+			<table class="stats-table">
+			  <thead>
+				<tr><th>Місяць</th><th>Доходи</th><th>Витрати</th><th>Результат</th><th>% доходів</th></tr>
+			  </thead>
+			  <tbody id="stats-monthly-table-body"></tbody>
+			</table>
+		  </div>
+		</div>
+
+		<div class="stats-section">
 		  <div class="stats-section__title stats-section__title--expense">Витрати по днях</div>
 		  <div class="bar-chart" id="chart-expense"></div>
 		  <div class="stats-empty" id="chart-expense-empty" hidden>Немає витрат за період</div>
@@ -1252,6 +1271,114 @@
 			  });
 		  }
 
+		  function formatMonth(month) {
+			  const [year, number] = month.split('-');
+			  return new Intl.DateTimeFormat('uk-UA', { month: 'long', year: 'numeric' })
+				  .format(new Date(Number(year), Number(number) - 1, 1));
+		  }
+
+		  function aggregateMonthly(expenseDaily, incomeDaily) {
+			  const months = new Map();
+
+			  [...expenseDaily, ...incomeDaily].forEach((point) => {
+				  const month = point.date.slice(0, 7);
+				  if (!months.has(month)) {
+					  months.set(month, { month, expense: 0, income: 0 });
+				  }
+			  });
+
+			  expenseDaily.forEach((point) => {
+				  months.get(point.date.slice(0, 7)).expense += point.amount;
+			  });
+			  incomeDaily.forEach((point) => {
+				  months.get(point.date.slice(0, 7)).income += point.amount;
+			  });
+
+			  return [...months.values()].map((item) => ({
+				  ...item,
+				  result: item.income - item.expense,
+				  incomePercent: item.income ? ((item.income - item.expense) / item.income) * 100 : null,
+			  }));
+		  }
+
+		  function renderMonthlyTable(months) {
+			  const tbody = document.getElementById('stats-monthly-table-body');
+			  const currencySymbol = getCurrencySymbol();
+			  tbody.innerHTML = '';
+
+			  [...months].reverse().forEach((item) => {
+				  const row = document.createElement('tr');
+				  const resultSign = item.result > 0 ? '+' : (item.result < 0 ? '−' : '');
+				  const cells = [
+					  formatMonth(item.month),
+					  `${formatAmount(item.income)} ${currencySymbol}`,
+					  `${formatAmount(item.expense)} ${currencySymbol}`,
+					  `${resultSign}${formatAmount(Math.abs(item.result))} ${currencySymbol}`,
+					  item.incomePercent === null ? '—' : `${item.incomePercent > 0 ? '+' : ''}${item.incomePercent.toFixed(1)}%`,
+				  ];
+
+				  cells.forEach((value, index) => {
+					  const cell = document.createElement('td');
+					  cell.textContent = value;
+					  if (index === 1) cell.className = 'stats-table__income';
+					  if (index === 2) cell.className = 'stats-table__expense';
+					  if (index === 3 || index === 4) {
+						  cell.className = item.result >= 0 ? 'stats-table__income' : 'stats-table__expense';
+					  }
+					  row.appendChild(cell);
+				  });
+				  tbody.appendChild(row);
+			  });
+		  }
+
+		  function renderMonthlyChart(months) {
+			  const container = document.getElementById('chart-monthly');
+			  const emptyEl = document.getElementById('chart-monthly-empty');
+			  container.innerHTML = '';
+
+			  const max = Math.max(...months.flatMap((item) => [item.income, item.expense, Math.abs(item.result)]), 0);
+			  if (max <= 0) {
+				  container.hidden = true;
+				  emptyEl.hidden = false;
+				  return;
+			  }
+			  container.hidden = false;
+			  emptyEl.hidden = true;
+
+			  const currencySymbol = getCurrencySymbol();
+			  months.forEach((item) => {
+				  const group = document.createElement('div');
+				  group.className = 'monthly-chart__group';
+				  const values = [
+					  ['income', item.income, 'Доходи'],
+					  ['expense', item.expense, 'Витрати'],
+					  [item.result >= 0 ? 'result' : 'result-negative', Math.abs(item.result), 'Результат'],
+				  ];
+
+				  values.forEach(([kind, value, label]) => {
+					  const bar = document.createElement('div');
+					  bar.className = `monthly-chart__bar monthly-chart__bar--${kind}`;
+					  bar.style.height = `${value > 0 ? Math.max((value / max) * 100, 2) : 0}%`;
+					  bar.tabIndex = 0;
+					  const shownValue = label === 'Результат' ? item.result : value;
+					  const tooltipText = `${formatMonth(item.month)} · ${label}: ${formatAmount(shownValue)} ${currencySymbol}`;
+					  bar.setAttribute('role', 'img');
+					  bar.setAttribute('aria-label', tooltipText);
+					  bar.addEventListener('pointerenter', () => showTooltip(bar, tooltipText));
+					  bar.addEventListener('pointerleave', hideTooltip);
+					  bar.addEventListener('focus', () => showTooltip(bar, tooltipText));
+					  bar.addEventListener('blur', hideTooltip);
+					  group.appendChild(bar);
+				  });
+
+				  const label = document.createElement('div');
+				  label.className = 'monthly-chart__label';
+				  label.textContent = formatMonth(item.month);
+				  group.appendChild(label);
+				  container.appendChild(group);
+			  });
+		  }
+
 		  // Ранжований список категорій: довжина смужки — частка від
 		  // найбільшої категорії періоду (не від загальної суми).
 		  function renderCategoryList(containerId, categoriesList, kind) {
@@ -1320,6 +1447,9 @@
 			  renderBarChart('chart-expense', data.expense.daily, 'expense');
 			  renderBarChart('chart-income', data.income.daily, 'income');
 			  renderTable(data.expense.daily, data.income.daily);
+			  const monthly = aggregateMonthly(data.expense.daily, data.income.daily);
+			  renderMonthlyChart(monthly);
+			  renderMonthlyTable(monthly);
 			  renderCategoryList('stats-categories-expense', data.expense.categories, 'expense');
 			  renderCategoryList('stats-categories-income', data.income.categories, 'income');
 		  }
