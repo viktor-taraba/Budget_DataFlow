@@ -278,7 +278,12 @@
 	  </div>
 
 	  <div class="stats-filters">
-		<div class="stats-presets" role="group" aria-label="Період">
+		<div class="stats-view-toggle" role="group" aria-label="Вигляд статистики">
+		  <button type="button" class="stats-view-btn stats-view-btn--active" data-view="daily" aria-pressed="true">По днях</button>
+		  <button type="button" class="stats-view-btn" data-view="monthly" aria-pressed="false">По місяцях</button>
+		</div>
+		<div id="stats-daily-filters">
+		  <div class="stats-presets" role="group" aria-label="Період за днями">
 		  <button type="button" class="stats-preset" data-days="7">7 днів</button>
 		  <button type="button" class="stats-preset" data-days="30">30 днів</button>
 		  <button type="button" class="stats-preset" data-days="90">90 днів</button>
@@ -291,6 +296,20 @@
 		  <span class="stats-range__sep">—</span>
 		  <input type="date" id="stats-end" max="{{ today }}">
 		  <button type="button" class="stats-apply" id="stats-apply">Застосувати</button>
+		</div>
+		</div>
+		<div id="stats-monthly-filters" hidden>
+		  <div class="stats-presets" role="group" aria-label="Період за місяцями">
+			<button type="button" class="stats-preset" data-months="6">Пів року</button>
+			<button type="button" class="stats-preset" data-months="12">Рік</button>
+			<button type="button" class="stats-preset" id="stats-monthly-custom-toggle">Свій період</button>
+		  </div>
+		  <div class="stats-range" id="stats-monthly-range" hidden>
+			<input type="date" id="stats-monthly-start" max="{{ today }}">
+			<span class="stats-range__sep">—</span>
+			<input type="date" id="stats-monthly-end" max="{{ today }}">
+			<button type="button" class="stats-apply" id="stats-monthly-apply">Застосувати</button>
+		  </div>
 		</div>
 		<div class="stats-currency-toggle">
 		  <button type="button" class="stats-currency-btn stats-currency-btn--active" id="stats-currency-uah" data-currency="UAH">₴</button>
@@ -315,7 +334,7 @@
 		  </div>
 		</div>
 
-		<div class="stats-section">
+		<div class="stats-section" id="stats-monthly-view" hidden>
 		  <div class="stats-section__title">Порівняння за місяцями</div>
 		  <div class="monthly-chart" id="chart-monthly"></div>
 		  <div class="stats-empty" id="chart-monthly-empty" hidden>Немає даних за період</div>
@@ -334,6 +353,7 @@
 		  </div>
 		</div>
 
+		<div id="stats-daily-view">
 		<div class="stats-section">
 		  <div class="stats-section__title stats-section__title--expense">Витрати по днях</div>
 		  <div class="bar-chart" id="chart-expense"></div>
@@ -366,6 +386,7 @@
 		  <div class="stats-section__title stats-section__title--income">Топ категорій доходів</div>
 		  <div class="cat-list" id="stats-categories-income"></div>
 		  <div class="stats-empty" id="stats-categories-income-empty" hidden>Немає даних за період</div>
+		</div>
 		</div>
 
 		<div class="stats-error" id="stats-error" hidden></div>
@@ -1127,15 +1148,28 @@
 		  const dialogBody = document.getElementById('stats-body');
 		  const errorBox = document.getElementById('stats-error');
 		  const periodLabel = document.getElementById('stats-period-label');
+		  const viewButtons = document.querySelectorAll('.stats-view-btn');
+		  const dailyFilters = document.getElementById('stats-daily-filters');
+		  const monthlyFilters = document.getElementById('stats-monthly-filters');
+		  const dailyView = document.getElementById('stats-daily-view');
+		  const monthlyView = document.getElementById('stats-monthly-view');
 		  const presetButtons = document.querySelectorAll('.stats-preset[data-days], .stats-preset[data-period]');
 		  const customToggle = document.getElementById('stats-custom-toggle');
 		  const rangeBox = document.getElementById('stats-range');
 		  const startInput = document.getElementById('stats-start');
 		  const endInput = document.getElementById('stats-end');
+		  const monthlyPresetButtons = document.querySelectorAll('.stats-preset[data-months]');
+		  const monthlyCustomToggle = document.getElementById('stats-monthly-custom-toggle');
+		  const monthlyRangeBox = document.getElementById('stats-monthly-range');
+		  const monthlyStartInput = document.getElementById('stats-monthly-start');
+		  const monthlyEndInput = document.getElementById('stats-monthly-end');
 		  const tooltip = document.getElementById('stats-tooltip');
 		  const currencyBtns = document.querySelectorAll('.stats-currency-btn');
 
 		  let currentRange = null;
+		  let dailyRange = null;
+		  let monthlyRange = null;
+		  let currentView = 'daily';
 		  let currentCurrency = 'UAH';
 
 		  function formatAmount(value) {
@@ -1167,6 +1201,21 @@
 
 		  function clearActivePreset() {
 			  presetButtons.forEach((btn) => {
+				  btn.classList.remove('is-active');
+				  btn.setAttribute('aria-pressed', 'false');
+			  });
+		  }
+
+		  function setActiveMonthlyPreset(activeButton) {
+			  monthlyPresetButtons.forEach((btn) => {
+				  const active = btn === activeButton;
+				  btn.classList.toggle('is-active', active);
+				  btn.setAttribute('aria-pressed', String(active));
+			  });
+		  }
+
+		  function clearActiveMonthlyPreset() {
+			  monthlyPresetButtons.forEach((btn) => {
 				  btn.classList.remove('is-active');
 				  btn.setAttribute('aria-pressed', 'false');
 			  });
@@ -1429,8 +1478,13 @@
 
 		  function renderStats(data) {
 			  currentRange = { start: data.start, end: data.end };
-			  periodLabel.textContent =
-				  `${formatDateFull(data.start)} – ${formatDateFull(data.end)} · ${data.expense.daily.length} дн.`;
+			  if (currentView === 'daily') {
+				  dailyRange = currentRange;
+				  periodLabel.textContent = `${formatDateFull(data.start)} – ${formatDateFull(data.end)} · ${data.expense.daily.length} дн.`;
+			  } else {
+				  monthlyRange = currentRange;
+				  periodLabel.textContent = `${formatDateFull(data.start)} – ${formatDateFull(data.end)}`;
+			  }
 
 			  const currencySymbol = getCurrencySymbol();
 			  document.getElementById('stats-total-expense').textContent = `${formatAmount(data.expense.total)} ${currencySymbol}`;
@@ -1510,6 +1564,18 @@
 			  btn.addEventListener('click', () => applyCalendarMonth(btn));
 		  });
 
+		  function applyMonthlyPreset(button) {
+			  const today = new Date();
+			  const start = new Date(today.getFullYear(), today.getMonth() - Number(button.dataset.months) + 1, 1);
+			  monthlyRangeBox.hidden = true;
+			  setActiveMonthlyPreset(button);
+			  fetchStats(formatLocalDate(start), formatLocalDate(today));
+		  }
+
+		  monthlyPresetButtons.forEach((btn) => {
+			  btn.addEventListener('click', () => applyMonthlyPreset(btn));
+		  });
+
 		  customToggle.addEventListener('click', () => {
 			  rangeBox.hidden = !rangeBox.hidden;
 			  if (!rangeBox.hidden && currentRange) {
@@ -1522,6 +1588,20 @@
 			  if (!startInput.value || !endInput.value) return;
 			  clearActivePreset();
 			  fetchStats(startInput.value, endInput.value);
+		  });
+
+		  monthlyCustomToggle.addEventListener('click', () => {
+			  monthlyRangeBox.hidden = !monthlyRangeBox.hidden;
+			  if (!monthlyRangeBox.hidden && monthlyRange) {
+				  monthlyStartInput.value = monthlyRange.start;
+				  monthlyEndInput.value = monthlyRange.end;
+			  }
+		  });
+
+		  document.getElementById('stats-monthly-apply').addEventListener('click', () => {
+			  if (!monthlyStartInput.value || !monthlyEndInput.value) return;
+			  clearActiveMonthlyPreset();
+			  fetchStats(monthlyStartInput.value, monthlyEndInput.value);
 		  });
 
 		  document.getElementById('stats-table-toggle').addEventListener('click', (e) => {
@@ -1545,13 +1625,36 @@
 			  });
 		  });
 
-		  function openStats() {
-			  overlay.hidden = false;
-			  if (currentRange) {
-				  fetchStats(currentRange.start, currentRange.end);
+		  function selectView(view) {
+			  currentView = view;
+			  const isMonthly = view === 'monthly';
+			  dailyFilters.hidden = isMonthly;
+			  monthlyFilters.hidden = !isMonthly;
+			  dailyView.hidden = isMonthly;
+			  monthlyView.hidden = !isMonthly;
+			  viewButtons.forEach((btn) => {
+				  const active = btn.dataset.view === view;
+				  btn.classList.toggle('stats-view-btn--active', active);
+				  btn.setAttribute('aria-pressed', String(active));
+			  });
+
+			  const savedRange = isMonthly ? monthlyRange : dailyRange;
+			  if (savedRange) {
+				  fetchStats(savedRange.start, savedRange.end);
+			  } else if (isMonthly) {
+				  applyMonthlyPreset(document.querySelector('.stats-preset[data-months="6"]'));
 			  } else {
 				  applyPreset(document.querySelector('.stats-preset[data-days="30"]'));
 			  }
+		  }
+
+		  viewButtons.forEach((btn) => {
+			  btn.addEventListener('click', () => selectView(btn.dataset.view));
+		  });
+
+		  function openStats() {
+			  overlay.hidden = false;
+			  selectView(currentView);
 		  }
 
 		  function closeStats() {

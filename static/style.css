@@ -404,6 +404,18 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
 
 /* Фільтр періоду — один ряд над усім вмістом, який він скеровує */
 .stats-filters { margin-bottom: 18px; }
+.stats-view-toggle { display: flex; gap: 4px; margin-bottom: 10px; }
+.stats-view-btn {
+  border: 1.5px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 7px 13px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.stats-view-btn--active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .stats-presets { display: flex; flex-wrap: wrap; gap: 6px; }
 .stats-preset {
   border: 1.5px solid var(--line);
