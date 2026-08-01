@@ -1,7 +1,8 @@
 """Unit-тести валідації суми, дати та номера рядка."""
-from datetime import date
+from datetime import date, datetime, timezone
 import pytest
-from app import validate_amount, validate_date, validate_row_number
+import app as app_module
+from app import validate_amount, validate_date, validate_row_number, today_kyiv
 
 
 class TestValidateAmount:
@@ -67,6 +68,35 @@ class TestValidateDate:
         # навіть якщо вона в минулому відносно "сьогодні".
         assert validate_date("2025-06-01", max_date=date(2025, 5, 1)) is None
         assert validate_date("2025-04-01", max_date=date(2025, 5, 1)) == "2025-04-01"
+
+
+class TestTodayKyiv:
+    """
+    Сервер (Render) працює в UTC. Пізно ввечері за UTC у Києві вже настав
+    наступний день — `today_kyiv()` має зважати на це.
+    """
+
+    def _freeze(self, monkeypatch, fixed_utc):
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed_utc.astimezone(tz) if tz else fixed_utc.replace(tzinfo=None)
+
+        monkeypatch.setattr(app_module, "datetime", FrozenDateTime)
+
+    def test_returns_next_day_when_utc_is_still_on_the_previous_one(self, monkeypatch):
+        # 23:30 UTC 31 липня — у Києві (літній час, UTC+3) вже 02:30, 1 серпня.
+        self._freeze(monkeypatch, datetime(2026, 7, 31, 23, 30, tzinfo=timezone.utc))
+        assert today_kyiv().isoformat() == "2026-08-01"
+
+    def test_matches_utc_day_during_kyiv_daytime(self, monkeypatch):
+        # 10:00 UTC — і в Києві, і в UTC один і той самий календарний день.
+        self._freeze(monkeypatch, datetime(2026, 7, 31, 10, 0, tzinfo=timezone.utc))
+        assert today_kyiv().isoformat() == "2026-07-31"
+
+    def test_validate_date_accepts_kyiv_today_even_if_utc_is_still_yesterday(self, monkeypatch):
+        self._freeze(monkeypatch, datetime(2026, 7, 31, 23, 30, tzinfo=timezone.utc))
+        assert validate_date("2026-08-01") == "2026-08-01"
 
 
 class TestValidateRowNumber:

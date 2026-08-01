@@ -338,6 +338,7 @@
 		<div class="stats-currency-toggle">
 		  <button type="button" class="stats-currency-btn stats-currency-btn--active" id="stats-currency-uah" data-currency="UAH">₴</button>
 		  <button type="button" class="stats-currency-btn" id="stats-currency-usd" data-currency="USD">$</button>
+		  <button type="button" class="stats-currency-btn" id="stats-currency-eur" data-currency="EUR">€</button>
 		</div>
 		<div class="stats-period-label" id="stats-period-label"></div>
 	  </div>
@@ -1354,7 +1355,9 @@
 		  }
 
 		  function getCurrencySymbol() {
-			  return currentCurrency === 'USD' ? '$' : '₴';
+			  if (currentCurrency === 'USD') return '$';
+			  if (currentCurrency === 'EUR') return '€';
+			  return '₴';
 		  }
 
 		  function formatDateFull(iso) {
@@ -1435,8 +1438,9 @@
 			  let peakIndex = 0;
 			  daily.forEach((d, i) => { if (d.amount > daily[peakIndex].amount) peakIndex = i; });
 
+			  const currencySymbol = getCurrencySymbol();
 			  daily.forEach((point, index) => {
-				  const label = `${formatDateFull(point.date)}: ${formatAmount(point.amount)} ₴`;
+				  const label = `${formatDateFull(point.date)}: ${formatAmount(point.amount)} ${currencySymbol}`;
 
 				  const slot = document.createElement('div');
 				  slot.className = 'bar-chart__slot';

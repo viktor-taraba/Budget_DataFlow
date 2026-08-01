@@ -2,8 +2,10 @@ import os
 import json
 import re
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
-from functools import wraps
+from functools import partial, wraps
+from zoneinfo import ZoneInfo
 import requests
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from flask_limiter import Limiter
@@ -14,7 +16,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from config import COLUMN_ORDER, DELETED_COLUMN_ORDER, WORKSHEET_EXPENSE, WORKSHEET_INCOME, WORKSHEET_DELETED
 
-# Кеширование частоти категорій (раз на день)
+# Кешування частоти категорій (раз на день)
 _category_frequency_cache = None
 _category_frequency_date = None
 
@@ -40,6 +42,12 @@ def load_categories():
         return {"expense": [], "income": [], "subcategories": {"expense": {}, "income": {}}}
 
 CATEGORIES = load_categories()
+
+# Сервер (Render) працює в UTC, а користувач — у Києві
+KYIV_TZ = ZoneInfo("Europe/Kyiv")
+def today_kyiv() -> date:
+    """Поточна дата за київським часом"""
+    return datetime.now(KYIV_TZ).date()
 
 
 def subcategories_for(entry_type: str, category: str) -> list:
@@ -73,36 +81,56 @@ def get_client():
     return _gs_client
 
 
-# Кеш курсів НБУ {date_iso: rate}
+# Кеш курсів НБУ {(currency, date_iso): rate}
 _exchange_rates_cache = {}
+# Скільки одночасних запитів до НБУ дозволяємо при пре-фетчі курсів.
+EXCHANGE_RATE_MAX_WORKERS = 8
 
 
-def get_exchange_rate(date_iso: str) -> float:
+def get_exchange_rate(date_iso: str, currency: str = "USD") -> float:
     """
-    Отримує курс USD до UAH від НБУ для конкретної дати.
+    Отримує курс `currency` (USD або EUR) до UAH від НБУ для конкретної дати.
     date_iso у форматі 'YYYY-MM-DD', наприклад '2025-09-01'
     Повертає курс (float) або None при помилці.
-    Результати кешуються протягом сесії.
+    Результати кешуються протягом сесії, окремо для кожної валюти.
     """
-    if date_iso in _exchange_rates_cache:
-        return _exchange_rates_cache[date_iso]
+    cache_key = (currency, date_iso)
+    if cache_key in _exchange_rates_cache:
+        return _exchange_rates_cache[cache_key]
 
     try:
         date_obj = datetime.strptime(date_iso, "%Y-%m-%d").date()
         date_str = date_obj.strftime("%Y%m%d")
 
-        url = f"https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?date={date_str}&valcode=USD&json"
+        url = f"https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?date={date_str}&valcode={currency}&json"
         response = requests.get(url, timeout=5)
         data = response.json()
 
         if data and len(data) > 0:
             rate = float(data[0]["rate"])
-            _exchange_rates_cache[date_iso] = rate
+            _exchange_rates_cache[cache_key] = rate
             return rate
     except (requests.RequestException, json.JSONDecodeError, KeyError, ValueError, IndexError, TypeError):
         pass
 
     return None
+
+
+def _prefetch_exchange_rates(dates, currency: str = "USD") -> None:
+    """
+    Заздалегідь підвантажує курси НБУ для набору дат — паралельно.
+
+    get_exchange_rate сам кладе результат у _exchange_rates_cache, тому
+    після виклику цієї функції наступні виклики get_exchange_rate для тих
+    самих дат — просто читання з кешу.
+    """
+    missing = sorted({d for d in dates if (currency, d) not in _exchange_rates_cache})
+    if not missing:
+        return
+
+    fetch = partial(get_exchange_rate, currency=currency)
+    with ThreadPoolExecutor(max_workers=min(EXCHANGE_RATE_MAX_WORKERS, len(missing))) as executor:
+        list(executor.map(fetch, missing))
 
 
 def worksheet_for(entry_type: str) -> str:
@@ -115,7 +143,7 @@ def _amount_for_sheet(value):
 
     Один хелпер для append_row і update_row — інакше дописані й відредаговані
     рядки лежать у таблиці в різних форматах ("100,0" проти "100.0"), і
-    відпечаток, знятий зі сторінки, перестає збігатися з рядком.
+    відбиток, знятий зі сторінки, перестає збігатися з рядком.
     """
     if isinstance(value, (int, float)):
         return str(value).replace(".", ",")
@@ -356,11 +384,21 @@ def _aggregate_stats(entries, start_date: str, end_date: str) -> dict:
     return {"total": round(total, 2), "daily": daily, "categories": categories}
 
 
-def _aggregate_stats_usd(entries, start_date: str, end_date: str) -> dict:
+def _aggregate_stats_foreign(entries, start_date: str, end_date: str, currency: str) -> dict:
     """
-    Агрегує записи на USD, конвертуючи кожний запис за його датою.
-    Якщо курс недоступний для якої-небудь дати, записи за цією датою пропускаються.
+    Агрегує записи в іноземній валюті (USD або EUR), конвертуючи кожний запис
+    за курсом НБУ на його дату. Якщо курс недоступний для якої-небудь дати,
+    записи за цією датою пропускаються.
+
+    Курси на всі дати періоду підвантажуються заздалегідь одним паралельним
+    пре-фетчем (_prefetch_exchange_rates) — інакше цей цикл сам робив би до
+    366 послідовних мережевих запитів, по одному на кожну унікальну дату.
     """
+    _prefetch_exchange_rates(
+        {entry.get("date", "") for entry in entries if start_date <= entry.get("date", "") <= end_date},
+        currency,
+    )
+
     daily_totals = {}
     category_totals = {}
     total = 0.0
@@ -373,15 +411,15 @@ def _aggregate_stats_usd(entries, start_date: str, end_date: str) -> dict:
         if amount is None:
             continue
 
-        rate = get_exchange_rate(entry_date)
+        rate = get_exchange_rate(entry_date, currency)
         if rate is None:
             continue
 
-        amount_usd = amount / rate
-        total += amount_usd
-        daily_totals[entry_date] = daily_totals.get(entry_date, 0.0) + amount_usd
+        amount_foreign = amount / rate
+        total += amount_foreign
+        daily_totals[entry_date] = daily_totals.get(entry_date, 0.0) + amount_foreign
         category = entry.get("category") or "Інше"
-        category_totals[category] = category_totals.get(category, 0.0) + amount_usd
+        category_totals[category] = category_totals.get(category, 0.0) + amount_foreign
 
     daily = [
         {"date": d, "amount": round(daily_totals.get(d, 0.0), 2)}
@@ -403,8 +441,8 @@ def get_period_stats(ws_name: str, start_date: str, end_date: str, currency: str
     ws = sheet.worksheet(ws_name)
     entries = _all_entries(ws.get_all_values())
 
-    if currency == "USD":
-        return _aggregate_stats_usd(entries, start_date, end_date)
+    if currency in ("USD", "EUR"):
+        return _aggregate_stats_foreign(entries, start_date, end_date, currency)
     else:
         return _aggregate_stats(entries, start_date, end_date)
 
@@ -621,7 +659,7 @@ def validate_date(raw, max_date=None):
     """
     Валідує дату у форматі YYYY-MM-DD.
 
-    max_date (за замовчуванням — сьогодні) визначає верхню межу: дати з майбутнього відхиляються. 
+    max_date (за замовчуванням — сьогодні за київським часом) визначає верхню межу: дати з майбутнього відхиляються. 
     Повертає нормалізований ISO-рядок, якщо дата коректна, інакше None.
     """
     if not raw:
@@ -631,7 +669,7 @@ def validate_date(raw, max_date=None):
     except (ValueError, TypeError):
         return None
     if max_date is None:
-        max_date = date.today()
+        max_date = today_kyiv()
     if parsed > max_date:
         return None
     return parsed.isoformat()
@@ -772,7 +810,7 @@ def index():
 
     return render_template(
         "index.html",
-        today=date.today().isoformat(),
+        today=today_kyiv().isoformat(),
         categories=CATEGORIES,
         recent_expenses=recent_expenses,
         recent_income=recent_income,
@@ -788,7 +826,7 @@ def submit():
     amount = validate_amount(request.form.get("amount"))
     category = request.form.get("category", "").strip()
     subcategory = request.form.get("subcategory", "").strip()
-    entry_date_raw = request.form.get("date") or date.today().isoformat()
+    entry_date_raw = request.form.get("date") or today_kyiv().isoformat()
     entry_date = validate_date(entry_date_raw)
     note = request.form.get("note", "").strip()
 
@@ -923,7 +961,6 @@ def edit():
             "date": entry_date,
             "note": note,
         }
-
         try:
             updated = update_row(worksheet_for(entry_type), row_number, expected_fingerprint, updates,
                                split_id=split_id, split_breakdown=None)
@@ -1004,14 +1041,14 @@ def edit():
 @app.route("/stats", methods=["GET"])
 @login_required
 def stats():
-    today = date.today()
+    today = today_kyiv()
     default_start = (today - timedelta(days=29)).isoformat()  # 30 днів включно з сьогодні
 
     start_date = validate_date(request.args.get("start")) or default_start
     end_date = validate_date(request.args.get("end")) or today.isoformat()
     currency = request.args.get("currency", "UAH").upper()
 
-    if currency not in ("UAH", "USD"):
+    if currency not in ("UAH", "USD", "EUR"):
         currency = "UAH"
 
     if start_date > end_date:
