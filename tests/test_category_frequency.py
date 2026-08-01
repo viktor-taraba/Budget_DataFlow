@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from datetime import date
+from datetime import date, timedelta
 import app as app_module
 
 
@@ -112,7 +112,7 @@ class TestMaybeUpdateCategoryOrder:
             "expense": ["🛒 Продукти"],
             "income": ["💼 Зарплата"],
         }
-        yesterday = date.today().replace(day=1) if date.today().day > 1 else date.today()
+        yesterday = date.today() - timedelta(days=1)
         app_module._category_frequency_date = yesterday
 
         with patch('app.count_category_frequency') as mock_count:
