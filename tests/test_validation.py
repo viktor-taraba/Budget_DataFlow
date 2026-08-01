@@ -23,7 +23,7 @@ class TestValidateAmount:
     @pytest.mark.parametrize(
         "raw",
         [
-            "0",  
+            "0",
             "-50",
             "",
             "   ",
@@ -36,6 +36,17 @@ class TestValidateAmount:
     )
     def test_rejects_invalid_amounts(self, raw):
         assert validate_amount(raw) is None
+
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            ("127\xa0050.30", 127050.30),  # non-breaking space (U+00A0) — Google Sheets format
+            ("1 000.50", 1000.50),          # regular spaces
+            ("1\xa0000,50", 1000.50),       # non-breaking space + comma
+        ],
+    )
+    def test_accepts_amounts_with_whitespace(self, raw, expected):
+        assert validate_amount(raw) == expected
 
 
 class TestValidateDate:
