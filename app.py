@@ -328,7 +328,7 @@ def get_recent_entries(ws_name: str, limit: int = 5):
 # Статистика за період
 # Довший період — це все одно один get_all_values() на аркуш, а не N запитів,
 # тому обмежуємо лише "розумну" максимальну довжину, а не кількість рядків.
-MAX_STATS_RANGE_DAYS = 366
+MAX_STATS_RANGE_DAYS = 1825  # ~5 років
 
 
 def _date_range(start_date: str, end_date: str) -> list:
@@ -1076,8 +1076,10 @@ def stats():
         start_date, end_date = end_date, start_date
 
     span_days = (date.fromisoformat(end_date) - date.fromisoformat(start_date)).days
+    warning = None
     if span_days > MAX_STATS_RANGE_DAYS:
         start_date = (date.fromisoformat(end_date) - timedelta(days=MAX_STATS_RANGE_DAYS)).isoformat()
+        warning = f"Період обмежено до {MAX_STATS_RANGE_DAYS} днів (~5 років). Показується останніх {MAX_STATS_RANGE_DAYS} днів до {end_date}"
 
     try:
         expense = get_period_stats(WORKSHEET_EXPENSE, start_date, end_date, currency)
@@ -1085,16 +1087,18 @@ def stats():
     except Exception as exc:
         return jsonify({"error": f"Не вдалося завантажити статистику: {exc}"}), 502
 
-    return jsonify(
-        {
-            "start": start_date,
-            "end": end_date,
-            "currency": currency,
-            "expense": expense,
-            "income": income,
-            "difference": round(income["total"] - expense["total"], 2),
-        }
-    )
+    result = {
+        "start": start_date,
+        "end": end_date,
+        "currency": currency,
+        "expense": expense,
+        "income": income,
+        "difference": round(income["total"] - expense["total"], 2),
+    }
+    if warning:
+        result["warning"] = warning
+
+    return jsonify(result)
 
 
 @app.route("/categories", methods=["GET"])
