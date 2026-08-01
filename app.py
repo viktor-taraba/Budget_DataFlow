@@ -657,17 +657,38 @@ def validate_amount(raw):
 
 def validate_date(raw, max_date=None):
     """
-    Валідує дату у форматі YYYY-MM-DD.
+    Валідує дату у форматі YYYY-MM-DD або Excel serial number.
 
-    max_date (за замовчуванням — сьогодні за київським часом) визначає верхню межу: дати з майбутнього відхиляються. 
+    Приймає:
+    - YYYY-MM-DD (ISO формат)
+    - Excel serial number (число, де 1 = 1900-01-01)
+
+    max_date (за замовчуванням — сьогодні за київським часом) визначає верхню межу: дати з майбутнього відхиляються.
     Повертає нормалізований ISO-рядок, якщо дата коректна, інакше None.
     """
     if not raw:
         return None
+
+    parsed = None
+
+    # Try ISO format first (YYYY-MM-DD)
     try:
-        parsed = datetime.strptime(raw, "%Y-%m-%d").date()
+        parsed = datetime.strptime(str(raw), "%Y-%m-%d").date()
     except (ValueError, TypeError):
-        return None
+        pass
+
+    # If ISO format failed, try Excel serial date
+    if parsed is None:
+        try:
+            serial = float(raw)
+            if serial < 0 or serial > 60000:  # Sanity check (covers 1900-2063)
+                return None
+            # Excel epoch is December 30, 1899
+            excel_epoch = datetime(1899, 12, 30).date()
+            parsed = excel_epoch + timedelta(days=serial)
+        except (ValueError, TypeError):
+            return None
+
     if max_date is None:
         max_date = today_kyiv()
     if parsed > max_date:

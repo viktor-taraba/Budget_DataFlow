@@ -69,6 +69,27 @@ class TestValidateDate:
         assert validate_date("2025-06-01", max_date=date(2025, 5, 1)) is None
         assert validate_date("2025-04-01", max_date=date(2025, 5, 1)) == "2025-04-01"
 
+    @pytest.mark.parametrize(
+        "serial, expected_iso",
+        [
+            (44192, "2020-12-27"),  # з BudgetApp.xlsx
+            (44194, "2020-12-29"),
+            (44196, "2020-12-31"),
+            (44205, "2021-01-09"),
+            (44211, "2021-01-15"),
+            ("44192", "2020-12-27"),  # серійні дати можуть бути рядками
+            (43831, "2020-01-01"),
+            (45000, "2023-03-15"),
+        ],
+    )
+    def test_accepts_excel_serial_dates(self, serial, expected_iso):
+        assert validate_date(serial) == expected_iso
+
+    def test_rejects_invalid_excel_serial(self):
+        # Занадто великі значення (поза розумними межами)
+        assert validate_date("100000") is None
+        assert validate_date("-100") is None
+
 
 class TestTodayKyiv:
     """

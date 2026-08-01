@@ -224,3 +224,9 @@ credentials.json
 /budgetapp-501518-238205dbf77e.json
 /to_do.md
 /test_.zip
+
+# Excel files (temporary imports, local backups)
+*.xlsx
+*.xls
+~$*.xlsx
+~$*.xls
