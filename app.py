@@ -643,12 +643,12 @@ def validate_amount(raw):
     """
     Парсить і валідує суму з форми.
 
-    Приймає кому як десятковий роздільник. Повертає float > 0, якщо рядок коректний, інакше None. 
-    Відхиляє науковий запис (1e10), від'ємні числа, кілька роздільників і сміття.
+    Приймає кому як десятковий роздільник. Повертає float > 0, якщо рядок коректний, інакше None.
+    Видаляє пробіли й неблокуючі пробіли (тисячні розділювачі).
     """
     if raw is None:
         return None
-    cleaned = raw.replace(",", ".").strip()
+    cleaned = "".join(raw.replace(",", ".").split())
     if not _AMOUNT_PATTERN.match(cleaned):
         return None
     value = float(cleaned)
