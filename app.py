@@ -116,6 +116,124 @@ def get_exchange_rate(date_iso: str, currency: str = "USD") -> float:
     return None
 
 
+def get_exchange_rate_range(start_date_iso: str, end_date_iso: str, currency: str = "USD") -> dict:
+    """
+    Отримує курс `currency` до UAH від НБУ за весь період одним запитом
+    (НБУ підтримує `start`/`end` для одного `valcode`, на відміну від
+    get_exchange_rate(), який запитує по одній даті за раз).
+
+    Повертає {date_iso: rate}. У відповіді НБУ можуть бути відсутні деякі
+    дати (наприклад, вихідні) — це нормально, викликач сам вирішує, як
+    заповнювати пропуски (див. _fill_rate_gaps).
+    """
+    try:
+        start_str = datetime.strptime(start_date_iso, "%Y-%m-%d").strftime("%Y%m%d")
+        end_str = datetime.strptime(end_date_iso, "%Y-%m-%d").strftime("%Y%m%d")
+    except (ValueError, TypeError):
+        return {}
+
+    try:
+        url = (
+            "https://bank.gov.ua/NBU_Exchange/exchange_site"
+            f"?start={start_str}&end={end_str}&valcode={currency}&sort=exchangedate&order=asc&json"
+        )
+        response = requests.get(url, timeout=10)
+        data = response.json()
+    except (requests.RequestException, json.JSONDecodeError):
+        return {}
+
+    rates = {}
+    for item in data or []:
+        try:
+            raw_date = item["exchangedate"]
+            rate = float(item["rate"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        try:
+            date_iso = datetime.strptime(raw_date, "%d.%m.%Y").date().isoformat()
+        except ValueError:
+            continue
+        rates[date_iso] = rate
+
+    return rates
+
+
+def _fill_rate_gaps(rates: dict, start_date: str, end_date: str) -> list:
+    """
+    Список {date, rate} для кожного дня періоду включно.
+
+    НБУ не завжди публікує новий курс на кожен календарний день (вихідні),
+    тому дні без власного значення успадковують останній відомий курс —
+    так само, як _aggregate_stats заповнює нулями дні без операцій, тільки
+    тут "порожній" день означає "курс не змінювався", а не "нуль".
+    """
+    series = []
+    last_rate = None
+    for d in _date_range(start_date, end_date):
+        if d in rates:
+            last_rate = rates[d]
+        series.append({"date": d, "rate": last_rate})
+
+    # Якщо перші дні періоду теж без курсу (наприклад, період починається
+    # у вихідний), назад заповнюємо їх найпершим відомим значенням.
+    first_known = next((point["rate"] for point in series if point["rate"] is not None), None)
+    for point in series:
+        if point["rate"] is None:
+            point["rate"] = first_known
+        else:
+            break
+
+    return series
+
+
+def get_currency_period_analysis(currency: str, start_date: str, end_date: str) -> dict:
+    """
+    Курс `currency` за період: щоденний ряд (з заповненими пропусками) плюс
+    підсумок — курс на початок/кінець періоду, зміна у відсотках і напрямок
+    (гривня девальвувала чи ревальвувала).
+    """
+    rates = get_exchange_rate_range(start_date, end_date, currency)
+    series = _fill_rate_gaps(rates, start_date, end_date)
+
+    known_values = [point["rate"] for point in series if point["rate"] is not None]
+    if not known_values:
+        return {
+            "currency": currency,
+            "start": start_date,
+            "end": end_date,
+            "series": series,
+            "start_rate": None,
+            "end_rate": None,
+            "change_percent": None,
+            "direction": None,
+        }
+
+    start_rate = known_values[0]
+    end_rate = known_values[-1]
+    change_percent = round((end_rate - start_rate) / start_rate * 100, 2) if start_rate else None
+
+    if change_percent is None or change_percent == 0:
+        direction = "stable"
+    elif change_percent > 0:
+        # Курс іноземної валюти зріс — за неї платять більше гривень,
+        # тобто гривня девальвувала (ослабла).
+        direction = "devaluation"
+    else:
+        # Курс іноземної валюти впав — гривня ревальвувала (зміцніла).
+        direction = "revaluation"
+
+    return {
+        "currency": currency,
+        "start": start_date,
+        "end": end_date,
+        "series": series,
+        "start_rate": start_rate,
+        "end_rate": end_rate,
+        "change_percent": change_percent,
+        "direction": direction,
+    }
+
+
 def _prefetch_exchange_rates(dates, currency: str = "USD") -> None:
     """
     Заздалегідь підвантажує курси НБУ для набору дат — паралельно.
@@ -1095,6 +1213,49 @@ def stats():
         "income": income,
         "difference": round(income["total"] - expense["total"], 2),
     }
+    if warning:
+        result["warning"] = warning
+
+    return jsonify(result)
+
+
+@app.route("/currency", methods=["GET"])
+@login_required
+def currency_page():
+    """
+    Окрема сторінка аналітики курсів валют (USD/EUR до UAH) — без прив'язки
+    до доходів/витрат користувача. Відкривається з вікна "Статистика".
+    """
+    return render_template("currency.html", today=today_kyiv().isoformat())
+
+
+@app.route("/currency/rates", methods=["GET"])
+@login_required
+def currency_rates():
+    today = today_kyiv()
+    default_start = (today - timedelta(days=29)).isoformat()  # 30 днів включно з сьогодні
+
+    start_date = validate_date(request.args.get("start")) or default_start
+    end_date = validate_date(request.args.get("end")) or today.isoformat()
+    currency = request.args.get("currency", "USD").upper()
+
+    if currency not in ("USD", "EUR"):
+        currency = "USD"
+
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
+    span_days = (date.fromisoformat(end_date) - date.fromisoformat(start_date)).days
+    warning = None
+    if span_days > MAX_STATS_RANGE_DAYS:
+        start_date = (date.fromisoformat(end_date) - timedelta(days=MAX_STATS_RANGE_DAYS)).isoformat()
+        warning = f"Період обмежено до {MAX_STATS_RANGE_DAYS} днів (~5 років). Показується останніх {MAX_STATS_RANGE_DAYS} днів до {end_date}"
+
+    try:
+        result = get_currency_period_analysis(currency, start_date, end_date)
+    except Exception as exc:
+        return jsonify({"error": f"Не вдалося завантажити курси валют: {exc}"}), 502
+
     if warning:
         result["warning"] = warning
 
