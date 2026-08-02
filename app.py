@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import subprocess
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
@@ -48,6 +49,65 @@ KYIV_TZ = ZoneInfo("Europe/Kyiv")
 def today_kyiv() -> date:
     """Поточна дата за київським часом"""
     return datetime.now(KYIV_TZ).date()
+
+
+# Дата й час останнього коміта (на практиці — останнього змерженого PR) у
+# гілці, з якої задеплоєно застосунок. Обчислюється раз за час життя процесу:
+# новий деплой на Render — це новий процес, тож "останній коміт" не може
+# змінитися, поки застосунок працює, і повторний виклик git на кожен GET /
+# був би зайвим.
+_last_update_cache = None
+
+
+def _format_commit_time(commit_date_iso: str):
+    """
+    Перетворює ISO-дату коміта (`git log --format=%cI`, напр.
+    '2026-08-02T15:30:00+03:00') на рядок у київському часі.
+
+    Винесено окремо від get_last_update_time(), яка викликає git, щоб
+    парсинг/конвертацію можна було тестувати без підпроцесу — так само, як
+    validate_amount/validate_date тестуються без Flask.
+    """
+    try:
+        commit_dt = datetime.fromisoformat(commit_date_iso)
+    except (ValueError, TypeError):
+        return None
+
+    if commit_dt.tzinfo is None:
+        # git завжди пише зміщення для %cI, але про всяк випадок —
+        # без зони вважаємо час UTC, а не наївно локальним.
+        commit_dt = commit_dt.replace(tzinfo=timezone.utc)
+
+    return commit_dt.astimezone(KYIV_TZ).strftime("%d.%m.%Y %H:%M")
+
+
+def get_last_update_time():
+    """
+    Дата й час останнього коміта репозиторію у київському часі, або None,
+    якщо git недоступний (наприклад, деплой без .git) чи стався збій.
+
+    Ніколи не кидає виняток — відсутність цієї інформації не повинна
+    ламати сторінку, так само як недоступність Google Sheets не ламає
+    блок "Останні записи" в index().
+    """
+    global _last_update_cache
+    if _last_update_cache is not None:
+        return _last_update_cache
+
+    try:
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%cI"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+        _last_update_cache = _format_commit_time(result.stdout.strip())
+    except (subprocess.SubprocessError, OSError):
+        _last_update_cache = None
+
+    return _last_update_cache
 
 
 def subcategories_for(entry_type: str, category: str) -> list:
@@ -893,6 +953,12 @@ def validate_split(category_amount_pairs, total_amount, entry_type: str = "expen
     split_rows.append({"category": last_category, "subcategory": last_subcategory, "amount": remainder})
 
     return True, None, split_rows
+
+
+@app.context_processor
+def inject_last_update():
+    """Робить `last_update` (дата й час останнього коміта, Київ) доступним у кожному шаблоні без явної передачі в кожен render_template()."""
+    return {"last_update": get_last_update_time()}
 
 
 # Авторизація (єдиний користувач — просто пароль у сесії)

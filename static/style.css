@@ -295,6 +295,13 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
   text-decoration: none;
 }
 
+.footer-meta {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--ink-soft);
+  opacity: 0.7;
+}
+
 .recent-card { margin-top: 16px; border-top-color: var(--line); padding-top: 20px; padding-bottom: 16px; }
 .recent-header { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-soft); margin-bottom: 14px; }
 .recent-section + .recent-section { margin-top: 18px; }

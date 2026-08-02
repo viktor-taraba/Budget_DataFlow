@@ -195,6 +195,9 @@
   </div>
 	
   <a class="footer-link" href="{{ url_for('logout') }}">Вийти</a>
+  {% if last_update %}
+    <div class="footer-meta">Оновлено: {{ last_update }}</div>
+  {% endif %}
 
   {# Модальне вікно керування категоріями #}
   <div class="categories-overlay" id="categories-overlay" hidden>
