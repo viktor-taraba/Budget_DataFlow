@@ -89,6 +89,9 @@
   </div>
 
   <a class="footer-link" href="{{ url_for('index') }}">← До бюджету</a>
+  {% if last_update %}
+    <div class="footer-meta">Оновлено: {{ last_update }}</div>
+  {% endif %}
 
   <div class="stats-tooltip" id="currency-tooltip" hidden></div>
 
