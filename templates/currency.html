@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>Курси валют — Бюджет</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💱</text></svg>">
+  <script>
+	(function () {
+	    const stored = localStorage.getItem('theme');
+	    const theme = stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+	    document.documentElement.setAttribute('data-theme', theme);
+	})();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="brand">
+	<div class="brand__left">
+	<div class="brand__mark">💱</div>
+	<div class="brand__title">Курси валют</div>
+	</div>
+	<div class="brand__actions">
+	  <a class="theme-toggle" href="{{ url_for('index') }}" aria-label="До бюджету" title="До бюджету">←</a>
+	  <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Перемкнути тему" title="Перемкнути світлу/темну тему">🌙</button>
+	</div>
+  </div>
+
+  <div class="card currency-card">
+	<div class="currency-toggle" role="group" aria-label="Валюта">
+	  <button type="button" class="currency-toggle__btn currency-toggle__btn--active" id="currency-usd" data-currency="USD">USD</button>
+	  <button type="button" class="currency-toggle__btn" id="currency-eur" data-currency="EUR">EUR</button>
+	</div>
+
+	<div class="stats-presets" role="group" aria-label="Період">
+	  <button type="button" class="stats-preset" data-days="7">7 днів</button>
+	  <button type="button" class="stats-preset" data-days="30">30 днів</button>
+	  <button type="button" class="stats-preset" data-days="90">90 днів</button>
+	  <button type="button" class="stats-preset" data-days="365">Рік</button>
+	  <button type="button" class="stats-preset" id="currency-custom-toggle">Свій період</button>
+	</div>
+	<div class="stats-range" id="currency-range" hidden>
+	  <input type="date" id="currency-start" max="{{ today }}">
+	  <span class="stats-range__sep">—</span>
+	  <input type="date" id="currency-end" max="{{ today }}">
+	  <button type="button" class="stats-apply" id="currency-apply">Застосувати</button>
+	</div>
+	<div class="stats-period-label" id="currency-period-label"></div>
+
+	<div class="stats-body" id="currency-body">
+	  <div class="stats-kpis">
+		<div class="stats-kpi">
+		  <div class="stats-kpi__label">Курс на початок</div>
+		  <div class="stats-kpi__value" id="currency-start-rate">—</div>
+		</div>
+		<div class="stats-kpi">
+		  <div class="stats-kpi__label">Курс на кінець</div>
+		  <div class="stats-kpi__value" id="currency-end-rate">—</div>
+		</div>
+		<div class="stats-kpi">
+		  <div class="stats-kpi__label">Зміна</div>
+		  <div class="stats-kpi__value" id="currency-change">—</div>
+		</div>
+	  </div>
+
+	  <div class="currency-direction" id="currency-direction" hidden></div>
+
+	  <div class="stats-section">
+		<div class="stats-section__title">Динаміка курсу</div>
+		<div class="rate-chart" id="rate-chart"></div>
+		<div class="stats-empty" id="rate-chart-empty" hidden>Немає даних за період</div>
+	  </div>
+
+	  <button type="button" class="stats-table-toggle" id="currency-table-toggle">Показати таблицею</button>
+	  <div class="stats-table-wrap" id="currency-table-wrap" hidden>
+		<table class="stats-table">
+		  <thead>
+			<tr><th>Дата</th><th>Курс</th></tr>
+		  </thead>
+		  <tbody id="currency-table-body"></tbody>
+		</table>
+	  </div>
+
+	  <div class="stats-error" id="currency-error" hidden></div>
+	  <div class="stats-warning" id="currency-warning" hidden style="color: #d97706; background-color: #fef3c7; padding: 0.75rem; border-radius: 0.375rem; margin-top: 0.5rem; border-left: 4px solid #d97706;"></div>
+	</div>
+  </div>
+
+  <a class="footer-link" href="{{ url_for('index') }}">← До бюджету</a>
+
+  <div class="stats-tooltip" id="currency-tooltip" hidden></div>
+
+  <script>
+	  const themeToggle = document.getElementById('theme-toggle');
+
+	  function updateToggleIcon() {
+		  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+		  themeToggle.textContent = isDark ? '☀️' : '🌙';
+	  }
+
+	  themeToggle.addEventListener('click', () => {
+		  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+		  const next = isDark ? 'light' : 'dark';
+		  document.documentElement.setAttribute('data-theme', next);
+		  localStorage.setItem('theme', next);
+		  updateToggleIcon();
+	  });
+
+	  updateToggleIcon();
+  </script>
+
+  <script>
+	  (function () {
+		  const dialogBody = document.getElementById('currency-body');
+		  const errorBox = document.getElementById('currency-error');
+		  const warningBox = document.getElementById('currency-warning');
+		  const periodLabel = document.getElementById('currency-period-label');
+		  const currencyBtns = document.querySelectorAll('.currency-toggle__btn');
+		  const presetButtons = document.querySelectorAll('.stats-preset[data-days]');
+		  const customToggle = document.getElementById('currency-custom-toggle');
+		  const rangeBox = document.getElementById('currency-range');
+		  const startInput = document.getElementById('currency-start');
+		  const endInput = document.getElementById('currency-end');
+		  const tooltip = document.getElementById('currency-tooltip');
+		  const directionBox = document.getElementById('currency-direction');
+
+		  let currentCurrency = 'USD';
+		  let currentRange = null;
+
+		  function formatRate(value) {
+			  if (value === null || value === undefined) return '—';
+			  return value.toFixed(4);
+		  }
+
+		  function formatDateFull(iso) {
+			  const [y, m, d] = iso.split('-');
+			  return `${d}.${m}.${y}`;
+		  }
+
+		  function isoDaysAgo(days) {
+			  const d = new Date();
+			  d.setDate(d.getDate() - days);
+			  return d.toISOString().slice(0, 10);
+		  }
+
+		  function setActivePreset(activeButton) {
+			  presetButtons.forEach((btn) => {
+				  const active = btn === activeButton;
+				  btn.classList.toggle('is-active', active);
+				  btn.setAttribute('aria-pressed', String(active));
+			  });
+		  }
+
+		  function clearActivePreset() {
+			  presetButtons.forEach((btn) => btn.classList.remove('is-active'));
+		  }
+
+		  function showTooltip(target, text) {
+			  tooltip.textContent = text;
+			  tooltip.hidden = false;
+			  const rect = target.getBoundingClientRect();
+			  const tipRect = tooltip.getBoundingClientRect();
+			  let left = rect.left + rect.width / 2 - tipRect.width / 2;
+			  left = Math.max(8, Math.min(left, window.innerWidth - tipRect.width - 8));
+			  const top = Math.max(8, rect.top - tipRect.height - 8);
+			  tooltip.style.left = `${left}px`;
+			  tooltip.style.top = `${top}px`;
+		  }
+
+		  function hideTooltip() {
+			  tooltip.hidden = true;
+		  }
+
+		  // Лінійний графік без бібліотек: будуємо SVG-полілінію вручну, як і
+		  // стовпчиковий графік статистики збирається з div-ів без бібліотек.
+		  function renderRateChart(series) {
+			  const container = document.getElementById('rate-chart');
+			  const emptyEl = document.getElementById('rate-chart-empty');
+			  container.innerHTML = '';
+
+			  const points = series.filter((p) => p.rate !== null && p.rate !== undefined);
+			  if (points.length === 0) {
+				  container.hidden = true;
+				  emptyEl.hidden = false;
+				  return;
+			  }
+			  container.hidden = false;
+			  emptyEl.hidden = true;
+
+			  const width = container.clientWidth || 600;
+			  const height = 180;
+			  const values = points.map((p) => p.rate);
+			  const min = Math.min(...values);
+			  const max = Math.max(...values);
+			  const range = (max - min) || 1;
+			  const stepX = points.length > 1 ? width / (points.length - 1) : width;
+
+			  const coords = points.map((p, i) => ({
+				  x: i * stepX,
+				  y: height - ((p.rate - min) / range) * (height - 24) - 12,
+				  date: p.date,
+				  rate: p.rate,
+			  }));
+
+			  const pathD = coords
+				  .map((pt, i) => `${i === 0 ? 'M' : 'L'} ${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`)
+				  .join(' ');
+
+			  const svgNS = 'http://www.w3.org/2000/svg';
+			  const svg = document.createElementNS(svgNS, 'svg');
+			  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+			  svg.setAttribute('preserveAspectRatio', 'none');
+			  svg.classList.add('rate-chart__svg');
+
+			  const path = document.createElementNS(svgNS, 'path');
+			  path.setAttribute('d', pathD);
+			  path.setAttribute('class', 'rate-chart__line');
+			  svg.appendChild(path);
+
+			  const currencySymbol = currentCurrency === 'EUR' ? '€' : '$';
+			  coords.forEach((pt) => {
+				  const circle = document.createElementNS(svgNS, 'circle');
+				  circle.setAttribute('cx', pt.x);
+				  circle.setAttribute('cy', pt.y);
+				  circle.setAttribute('r', 3);
+				  circle.setAttribute('class', 'rate-chart__point');
+				  circle.setAttribute('tabindex', '0');
+				  const label = `${formatDateFull(pt.date)}: ${formatRate(pt.rate)} ₴/${currencySymbol}`;
+				  circle.addEventListener('pointerenter', () => showTooltip(circle, label));
+				  circle.addEventListener('pointermove', () => showTooltip(circle, label));
+				  circle.addEventListener('pointerleave', hideTooltip);
+				  circle.addEventListener('focus', () => showTooltip(circle, label));
+				  circle.addEventListener('blur', hideTooltip);
+				  svg.appendChild(circle);
+			  });
+
+			  container.appendChild(svg);
+		  }
+
+		  function renderTable(series) {
+			  const tbody = document.getElementById('currency-table-body');
+			  tbody.innerHTML = '';
+
+			  [...series].reverse().forEach((point) => {
+				  const tr = document.createElement('tr');
+				  const dateCell = document.createElement('td');
+				  dateCell.textContent = formatDateFull(point.date);
+				  const rateCell = document.createElement('td');
+				  rateCell.textContent = formatRate(point.rate);
+				  tr.append(dateCell, rateCell);
+				  tbody.appendChild(tr);
+			  });
+		  }
+
+		  function renderSummary(data) {
+			  document.getElementById('currency-start-rate').textContent = formatRate(data.start_rate);
+			  document.getElementById('currency-end-rate').textContent = formatRate(data.end_rate);
+
+			  const changeEl = document.getElementById('currency-change');
+			  changeEl.classList.remove('stats-kpi__value--income', 'stats-kpi__value--expense');
+
+			  if (data.change_percent === null || data.change_percent === undefined) {
+				  changeEl.textContent = '—';
+				  directionBox.hidden = true;
+				  return;
+			  }
+
+			  const sign = data.change_percent > 0 ? '+' : '';
+			  changeEl.textContent = `${sign}${data.change_percent.toFixed(2)}%`;
+
+			  directionBox.hidden = false;
+			  if (data.direction === 'devaluation') {
+				  changeEl.classList.add('stats-kpi__value--expense');
+				  directionBox.textContent = 'Гривня девальвувала (курс зріс) за обраний період';
+				  directionBox.className = 'currency-direction currency-direction--down';
+			  } else if (data.direction === 'revaluation') {
+				  changeEl.classList.add('stats-kpi__value--income');
+				  directionBox.textContent = 'Гривня ревальвувала (курс впав) за обраний період';
+				  directionBox.className = 'currency-direction currency-direction--up';
+			  } else {
+				  directionBox.textContent = 'Курс не змінився за обраний період';
+				  directionBox.className = 'currency-direction';
+			  }
+		  }
+
+		  async function fetchRates(start, end) {
+			  dialogBody.classList.add('is-loading');
+			  errorBox.hidden = true;
+			  warningBox.hidden = true;
+
+			  try {
+				  const response = await fetch(`/currency/rates?start=${start}&end=${end}&currency=${currentCurrency}`);
+				  const data = await response.json();
+				  if (!response.ok) {
+					  throw new Error(data.error || 'Не вдалося завантажити курси валют');
+				  }
+
+				  currentRange = { start: data.start, end: data.end };
+				  periodLabel.textContent = `${formatDateFull(data.start)} – ${formatDateFull(data.end)}`;
+
+				  if (data.warning) {
+					  warningBox.textContent = data.warning;
+					  warningBox.hidden = false;
+				  }
+
+				  renderSummary(data);
+				  renderRateChart(data.series);
+				  renderTable(data.series);
+			  } catch (err) {
+				  errorBox.textContent = err.message || 'Не вдалося завантажити курси валют';
+				  errorBox.hidden = false;
+			  } finally {
+				  dialogBody.classList.remove('is-loading');
+			  }
+		  }
+
+		  function applyPreset(button) {
+			  rangeBox.hidden = true;
+			  setActivePreset(button);
+			  const days = Number(button.dataset.days);
+			  fetchRates(isoDaysAgo(days - 1), isoDaysAgo(0));
+		  }
+
+		  presetButtons.forEach((btn) => btn.addEventListener('click', () => applyPreset(btn)));
+
+		  customToggle.addEventListener('click', () => {
+			  rangeBox.hidden = !rangeBox.hidden;
+			  if (!rangeBox.hidden && currentRange) {
+				  startInput.value = currentRange.start;
+				  endInput.value = currentRange.end;
+			  }
+		  });
+
+		  document.getElementById('currency-apply').addEventListener('click', () => {
+			  if (!startInput.value || !endInput.value) return;
+			  clearActivePreset();
+			  fetchRates(startInput.value, endInput.value);
+		  });
+
+		  document.getElementById('currency-table-toggle').addEventListener('click', (e) => {
+			  const wrap = document.getElementById('currency-table-wrap');
+			  wrap.hidden = !wrap.hidden;
+			  e.target.textContent = wrap.hidden ? 'Показати таблицею' : 'Приховати таблицю';
+		  });
+
+		  currencyBtns.forEach((btn) => {
+			  btn.addEventListener('click', () => {
+				  const newCurrency = btn.dataset.currency;
+				  if (newCurrency === currentCurrency) return;
+
+				  currentCurrency = newCurrency;
+				  currencyBtns.forEach((b) => b.classList.remove('currency-toggle__btn--active'));
+				  btn.classList.add('currency-toggle__btn--active');
+
+				  if (currentRange) {
+					  fetchRates(currentRange.start, currentRange.end);
+				  }
+			  });
+		  });
+
+		  // За замовчуванням — USD за останні 30 днів.
+		  applyPreset(document.querySelector('.stats-preset[data-days="30"]'));
+	  })();
+  </script>
+</body>
+</html>
