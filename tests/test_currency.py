@@ -174,6 +174,21 @@ class TestGetCurrencyPeriodAnalysis:
         result = get_currency_period_analysis("USD", "2026-07-01", "2026-07-03")
         assert [p["date"] for p in result["series"]] == ["2026-07-01", "2026-07-02", "2026-07-03"]
 
+    def test_single_day_period_is_stable_by_definition(self, monkeypatch):
+        # start_date == end_date: один день, один відомий курс — start_rate і
+        # end_rate однакові, зміна не може бути нічим іншим, окрім 0%.
+        monkeypatch.setattr(
+            app_module,
+            "get_exchange_rate_range",
+            lambda start, end, currency: {"2026-07-01": 41.5},
+        )
+        result = get_currency_period_analysis("USD", "2026-07-01", "2026-07-01")
+        assert result["start_rate"] == 41.5
+        assert result["end_rate"] == 41.5
+        assert result["change_percent"] == 0.0
+        assert result["direction"] == "stable"
+        assert result["series"] == [{"date": "2026-07-01", "rate": 41.5}]
+
 
 class TestCurrencyPageRoute:
     def test_requires_login(self, client):
@@ -191,6 +206,26 @@ class TestCurrencyPageRoute:
         response = logged_in_client.get("/")
         assert response.status_code == 200
         assert b'href="/currency"' in response.data
+
+    def test_renders_currency_toggle_with_usd_active_by_default(self, logged_in_client):
+        html = logged_in_client.get("/currency").data.decode()
+        assert 'class="currency-toggle__btn currency-toggle__btn--active" id="currency-usd"' in html
+        assert 'class="currency-toggle__btn" id="currency-eur"' in html
+
+    def test_does_not_touch_google_sheets(self, logged_in_client, monkeypatch):
+        """
+        Сторінка курсів валют навмисно не прив'язана до доходів/витрат
+        користувача (див. CLAUDE.md) — переконуємось, що вона взагалі не
+        звертається до Google Sheets, а не лише що успішно рендериться.
+        """
+
+        def fail_if_called():
+            raise AssertionError("GET /currency не повинен звертатись до Google Sheets")
+
+        monkeypatch.setattr(app_module, "get_client", fail_if_called)
+
+        response = logged_in_client.get("/currency")
+        assert response.status_code == 200
 
 
 class TestCurrencyRatesRoute:
@@ -298,3 +333,25 @@ class TestCurrencyRatesRoute:
         data = response.get_json()
         assert data["direction"] == "devaluation"
         assert data["change_percent"] == 10.0
+
+    def test_does_not_touch_google_sheets(self, logged_in_client, monkeypatch):
+        """Так само, як сторінка — сам JSON-ендпоінт теж не має власного шляху до Sheets."""
+
+        def fail_if_called():
+            raise AssertionError("GET /currency/rates не повинен звертатись до Google Sheets")
+
+        monkeypatch.setattr(app_module, "get_client", fail_if_called)
+        # get_currency_period_analysis саму по собі тут підміняємо, бо ціль
+        # цього тесту — маршрут, а не мережевий виклик до НБУ (той окремо
+        # покритий тестами TestGetExchangeRateRange).
+        monkeypatch.setattr(
+            app_module,
+            "get_currency_period_analysis",
+            lambda currency, start_date, end_date: {
+                "currency": currency, "start": start_date, "end": end_date, "series": [],
+                "start_rate": None, "end_rate": None, "change_percent": None, "direction": None,
+            },
+        )
+
+        response = logged_in_client.get("/currency/rates")
+        assert response.status_code == 200
