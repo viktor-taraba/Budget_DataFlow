@@ -62,7 +62,7 @@ class TestGetLastUpdateTime:
         monkeypatch.setattr(app_module.subprocess, "run", fake_run)
 
         assert get_last_update_time() == "02.08.2026 15:30"
-        assert calls[0][:3] == ["git", "log", "-1"]
+        assert calls[0] == ["git", "log", "-1", "--format=%cI"]
 
     def test_caches_result_across_calls(self, monkeypatch):
         self._reset_cache(monkeypatch)
@@ -111,6 +111,20 @@ class TestGetLastUpdateTime:
         monkeypatch.setattr(app_module.subprocess, "run", fake_run)
 
         assert get_last_update_time() is None
+
+
+class TestInjectLastUpdate:
+    def test_returns_dict_with_last_update_key(self, monkeypatch):
+        monkeypatch.setattr(app_module, "get_last_update_time", lambda: "02.08.2026 15:30")
+        with app_module.app.test_request_context("/"):
+            result = app_module.inject_last_update()
+        assert result == {"last_update": "02.08.2026 15:30"}
+
+    def test_returns_none_when_unavailable(self, monkeypatch):
+        monkeypatch.setattr(app_module, "get_last_update_time", lambda: None)
+        with app_module.app.test_request_context("/"):
+            result = app_module.inject_last_update()
+        assert result == {"last_update": None}
 
 
 class TestLastUpdateInTemplates:
