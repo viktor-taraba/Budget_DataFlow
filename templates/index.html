@@ -852,11 +852,12 @@
 
 		  async function subcategoryRequest(path, body) {
 			  const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+			  const data = await response.json();
 			  if (!response.ok) {
-				  const data = await response.json();
 				  throw new Error(data.error || 'Помилка оновлення підкатегорії');
 			  }
 			  await loadCategories();
+			  if (data.warning) showError(data.warning);
 		  }
 
 		  async function deleteSubcategory(category, name) {
@@ -903,13 +904,14 @@
 					  headers: { 'Content-Type': 'application/json' },
 					  body: JSON.stringify({ type: currentType, old_name: oldName, new_name: newName })
 				  });
+				  const data = await response.json();
 
 				  if (!response.ok) {
-					  const data = await response.json();
 					  throw new Error(data.error || 'Помилка перейменування');
 				  }
 
 				  await loadCategories();
+				  if (data.warning) showError(data.warning);
 			  } catch (err) {
 				  showError(err.message);
 			  }
@@ -928,14 +930,15 @@
 					  headers: { 'Content-Type': 'application/json' },
 					  body: JSON.stringify({ type: currentType, name })
 				  });
+				  const data = await response.json();
 
 				  if (!response.ok) {
-					  const data = await response.json();
 					  throw new Error(data.error || 'Помилка додавання');
 				  }
 
 				  input.value = '';
 				  await loadCategories();
+				  if (data.warning) showError(data.warning);
 			  } catch (err) {
 				  showError(err.message);
 			  }

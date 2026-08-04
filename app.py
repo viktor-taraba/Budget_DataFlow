@@ -1339,6 +1339,137 @@ def save_categories():
         json.dump(CATEGORIES, f, ensure_ascii=False, indent=2)
 
 
+# Автодобавлення emoji до категорій/підкатегорій без неї (через OpenAI)
+# Ключ необов'язковий: без нього чи за будь-якого збою LLM просто не
+# викликається, категорія зберігається як є, а користувач бачить попередження.
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_TIMEOUT_SECONDS = 8
+
+_openai_client = None
+
+
+def _import_openai_client_class():
+    """Винесено окремо від get_openai_client(), щоб тести могли підмінити сам
+    імпорт (і перевірити гілку «пакет не встановлений»), не деінсталюючи openai."""
+    from openai import OpenAI
+    return OpenAI
+
+
+def get_openai_client():
+    """
+    Лінивий клієнт OpenAI — так само, як get_client() лінивий для Google
+    Sheets. Повертає None, якщо ключ не налаштований або пакет `openai` не
+    встановлений: обидва випадки для викликача means "LLM недоступний",
+    а не помилка застосунку.
+    """
+    global _openai_client
+    if _openai_client is not None:
+        return _openai_client
+    if not OPENAI_API_KEY:
+        return None
+    try:
+        openai_client_class = _import_openai_client_class()
+    except ImportError:
+        return None
+    _openai_client = openai_client_class(api_key=OPENAI_API_KEY, timeout=OPENAI_TIMEOUT_SECONDS)
+    return _openai_client
+
+
+# Основні unicode-блоки emoji (символи, емоційки, транспорт, прапори тощо) —
+# використовується і для перевірки "чи вже є emoji", і для вирізання emoji з
+# відповіді моделі, і для порівняння категорій на дублікат незалежно від emoji.
+_EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F1E6-\U0001F1FF"  # прапори (regional indicators)
+    "\U0001F300-\U0001F5FF"  # символи й піктограми
+    "\U0001F600-\U0001F64F"  # емоційки
+    "\U0001F680-\U0001F6FF"  # транспорт і карти
+    "\U0001F700-\U0001F7FF"  # алхімічні символи, геометричні фігури
+    "\U0001F800-\U0001F8FF"  # додаткові стрілки
+    "\U0001F900-\U0001F9FF"  # додаткові символи й піктограми
+    "\U0001FA00-\U0001FAFF"  # шахи, додаткові символи (напр. 🩹, 🪑)
+    "\U00002600-\U000026FF"  # різні символи (☀️, ⚽, ⚔️...)
+    "\U00002700-\U000027BF"  # дінгбати (✂️, ✈️...)
+    "\U00002B00-\U00002BFF"  # стрілки/зірки (⭐...)
+    "\U0000FE0F"             # variation selector (модифікатор emoji-стилю)
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def has_emoji(text: str) -> bool:
+    """Чи містить рядок хоч один emoji-символ — якщо так, LLM не викликається."""
+    return bool(_EMOJI_PATTERN.search(text or ""))
+
+
+def _category_core_text(name: str) -> str:
+    """
+    Назва категорії без ведучих emoji й зайвих пробілів, у нижньому регістрі.
+
+    Потрібна для перевірки на дублікат незалежно від emoji: інакше "Кіно" і
+    щойно додане "🎬 Кіно" вважались би різними категоріями лише через те, що
+    одну з них (не) вдалося доповнити emoji.
+    """
+    return _EMOJI_PATTERN.sub("", name or "").strip().casefold()
+
+
+def suggest_emoji(name: str) -> str:
+    """
+    Питає OpenAI одну емодзі, яка найкраще пасує до назви категорії.
+
+    Кидає виняток за будь-якого збою (немає клієнта, мережа, модель
+    відповіла незрозуміло) — add_emoji_if_missing() ловить це самостійно.
+    """
+    client = get_openai_client()
+    if client is None:
+        raise RuntimeError("OpenAI недоступний: немає ключа або пакета `openai`")
+
+    response = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Користувач додає категорію витрат або доходів у застосунку "
+                    "обліку бюджету. Підбери ОДНУ емодзі, яка найкраще її "
+                    "ілюструє. Відповідай лише цим одним emoji-символом, без "
+                    "жодного тексту, лапок чи пояснень."
+                ),
+            },
+            {"role": "user", "content": name},
+        ],
+        max_tokens=10,
+        timeout=OPENAI_TIMEOUT_SECONDS,
+    )
+    content = (response.choices[0].message.content or "").strip()
+    match = _EMOJI_PATTERN.search(content)
+    if not match:
+        raise RuntimeError(f"Модель не повернула emoji: {content!r}")
+    return match.group(0)
+
+
+def add_emoji_if_missing(name: str):
+    """
+    Якщо `name` вже містить emoji — повертає (name, None) без звернень до LLM.
+    Інакше просить OpenAI підібрати emoji і повертає ("{emoji} {name}", None).
+
+    Якщо LLM недоступний чи стався будь-який збій — повертає (name, warning):
+    `name` лишається без змін, а `warning` — текст для користувача. Категорія
+    ЗАВЖДИ зберігається, навіть якщо emoji підібрати не вдалось.
+    """
+    name = (name or "").strip()
+    if not name or has_emoji(name):
+        return name, None
+
+    try:
+        emoji = suggest_emoji(name)
+    except Exception:
+        return name, "Не вдалося підібрати emoji автоматично (LLM недоступний) — категорію збережено без неї."
+
+    return f"{emoji} {name}", None
+
+
 def count_category_frequency():
     """
     Рахує частоту використання кожної категорії у обох таблицях (без обмеження по періоду).
@@ -1405,12 +1536,19 @@ def add_category():
         return jsonify({"error": "Некоректний тип"}), 400
     if not category_name:
         return jsonify({"error": "Назва категорії не може бути порожною"}), 400
-    if category_name in CATEGORIES[entry_type]:
+
+    category_name, emoji_warning = add_emoji_if_missing(category_name)
+
+    existing_core = {_category_core_text(c) for c in CATEGORIES[entry_type]}
+    if _category_core_text(category_name) in existing_core:
         return jsonify({"error": "Така категорія вже існує"}), 409
 
     CATEGORIES[entry_type].append(category_name)
     save_categories()
-    return jsonify({"success": True, "categories": CATEGORIES})
+    response = {"success": True, "categories": CATEGORIES}
+    if emoji_warning:
+        response["warning"] = emoji_warning
+    return jsonify(response)
 
 
 @app.route("/categories/delete", methods=["POST"])
@@ -1443,7 +1581,11 @@ def rename_category():
         return jsonify({"error": "Назви не можуть бути порожними"}), 400
     if old_name not in CATEGORIES[entry_type]:
         return jsonify({"error": "Стара категорія не знайдена"}), 404
-    if new_name in CATEGORIES[entry_type]:
+
+    new_name, emoji_warning = add_emoji_if_missing(new_name)
+
+    existing_core = {_category_core_text(c) for c in CATEGORIES[entry_type] if c != old_name}
+    if _category_core_text(new_name) in existing_core:
         return jsonify({"error": "Така категорія вже існує"}), 409
 
     idx = CATEGORIES[entry_type].index(old_name)
@@ -1452,7 +1594,10 @@ def rename_category():
     if children is not None:
         CATEGORIES["subcategories"][entry_type][new_name] = children
     save_categories()
-    return jsonify({"success": True, "categories": CATEGORIES})
+    response = {"success": True, "categories": CATEGORIES}
+    if emoji_warning:
+        response["warning"] = emoji_warning
+    return jsonify(response)
 
 
 def _subcategory_request_data():
@@ -1472,13 +1617,21 @@ def add_subcategory():
     if not name:
         return jsonify({"error": "Назва підкатегорії не може бути порожньою"}), 400
 
+    name, emoji_warning = add_emoji_if_missing(name)
+
     all_subcategories = CATEGORIES["subcategories"][entry_type]
-    if any(name in values for values in all_subcategories.values()):
+    existing_core = {
+        _category_core_text(existing) for values in all_subcategories.values() for existing in values
+    }
+    if _category_core_text(name) in existing_core:
         return jsonify({"error": "Така підкатегорія вже належить іншій категорії"}), 409
 
     all_subcategories.setdefault(category, []).append(name)
     save_categories()
-    return jsonify({"success": True, "categories": CATEGORIES})
+    response = {"success": True, "categories": CATEGORIES}
+    if emoji_warning:
+        response["warning"] = emoji_warning
+    return jsonify(response)
 
 
 @app.route("/subcategories/delete", methods=["POST"])
@@ -1510,12 +1663,24 @@ def rename_subcategory():
         return jsonify({"error": "Підкатегорія не знайдена"}), 404
     if not new_name:
         return jsonify({"error": "Назва підкатегорії не може бути порожньою"}), 400
-    if any(new_name in values for values in CATEGORIES["subcategories"][entry_type].values()):
+
+    new_name, emoji_warning = add_emoji_if_missing(new_name)
+
+    existing_core = {
+        _category_core_text(existing)
+        for values in CATEGORIES["subcategories"][entry_type].values()
+        for existing in values
+        if existing != old_name
+    }
+    if _category_core_text(new_name) in existing_core:
         return jsonify({"error": "Така підкатегорія вже належить іншій категорії"}), 409
 
     children[children.index(old_name)] = new_name
     save_categories()
-    return jsonify({"success": True, "categories": CATEGORIES})
+    response = {"success": True, "categories": CATEGORIES}
+    if emoji_warning:
+        response["warning"] = emoji_warning
+    return jsonify(response)
 
 
 if __name__ == "__main__":
