@@ -28,21 +28,101 @@ app.secret_key = os.environ["FLASK_SECRET_KEY"]
 SHEET_ID = os.environ["GOOGLE_SHEET_ID"]
 APP_PASSWORD = os.environ["APP_PASSWORD"]
 
-# Завантажуємо категорії з categories.json
-def load_categories():
+# Google Sheets
+_gs_client = None
+
+def get_client():
+    global _gs_client
+    if _gs_client is None:
+        creds_json = os.environ["GOOGLE_CREDENTIALS_JSON"]
+        info = json.loads(creds_json)
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        creds = Credentials.from_service_account_info(info, scopes=scopes)
+        _gs_client = gspread.authorize(creds)
+    return _gs_client
+
+CATEGORIES_CELL = "A1"
+
+
+def _normalize_categories(categories: dict) -> dict:
+    categories.setdefault("expense", [])
+    categories.setdefault("income", [])
+    subcategories = categories.setdefault("subcategories", {})
+    subcategories.setdefault("expense", {})
+    subcategories.setdefault("income", {})
+    return categories
+
+
+def _categories_worksheet():
+    """Аркуш 'Categories' у тій самій таблиці, що й Доходи/Витрати.
+    Створюється автоматично при першому зверненні, якщо його ще немає."""
+    client = get_client()
+    sheet = client.open_by_key(SHEET_ID)
     try:
-        with open("categories.json", "r", encoding="utf-8") as f:
-            categories = json.load(f)
-            categories.setdefault("expense", [])
-            categories.setdefault("income", [])
-            subcategories = categories.setdefault("subcategories", {})
-            subcategories.setdefault("expense", {})
-            subcategories.setdefault("income", {})
-            return categories
+        return sheet.worksheet(WORKSHEET_CATEGORIES)
+    except gspread.WorksheetNotFound:
+        return sheet.add_worksheet(title=WORKSHEET_CATEGORIES, rows=1, cols=1)
+
+
+def _load_categories_from_sheet() -> dict:
+    ws = _categories_worksheet()
+    raw = ws.acell(CATEGORIES_CELL).value
+    if not raw:
+        raise ValueError("Аркуш Categories порожній")
+    return _normalize_categories(json.loads(raw))
+
+
+def _write_categories_to_sheet(categories: dict) -> None:
+    ws = _categories_worksheet()
+    ws.update([[json.dumps(categories, ensure_ascii=False)]], CATEGORIES_CELL, value_input_option="RAW")
+
+
+def _load_categories_from_file() -> dict:
+    """Резервний варіант — локальна розробка без доступу до Sheets, або
+    перший запуск до першої міграції."""
+    with open("categories.json", "r", encoding="utf-8") as f:
+        return _normalize_categories(json.load(f))
+
+
+def load_categories() -> dict:
+    """
+    Категорії живуть в аркуші 'Categories' тієї ж Google-таблиці, що й
+    доходи/витрати — так вони переживають кожен redeploy на Render, на
+    відміну від categories.json, який пишеться лише у файлову систему
+    контейнера і зникає з кожним новим деплоєм.
+
+    Sheets недоступний чи ще порожній -> падаємо на локальний файл, той
+    самий принцип "не ламати застосунок", що й get_recent_entries().
+    """
+    try:
+        return _load_categories_from_sheet()
+    except Exception:
+        pass
+
+    try:
+        categories = _load_categories_from_file()
     except (FileNotFoundError, json.JSONDecodeError):
         return {"expense": [], "income": [], "subcategories": {"expense": {}, "income": {}}}
 
+    # Одноразова міграція: локальний файл є, а в Sheets ще порожньо —
+    # переносимо зараз, щоб наступний деплой уже читав із Sheets.
+    try:
+        _write_categories_to_sheet(categories)
+    except Exception:
+        pass
+
+    return categories
+
+
 CATEGORIES = load_categories()
+
+
+def save_categories():
+    """Джерело істини — аркуш 'Categories' (переживає redeploy).
+    Локальний categories.json лишається як швидкий офлайн-резерв."""
+    _write_categories_to_sheet(CATEGORIES)
+    with open("categories.json", "w", encoding="utf-8") as f:
+        json.dump(CATEGORIES, f, ensure_ascii=False, indent=2)
 
 # Сервер (Render) працює в UTC, а користувач — у Києві
 KYIV_TZ = ZoneInfo("Europe/Kyiv")
@@ -122,25 +202,9 @@ def subcategory_is_valid(entry_type: str, category: str, subcategory: str) -> bo
 # Render (і більшість хостингів) стоїть за проксі: без цього request.remote_addr завжди буде адресою проксі, а не клієнта,
 # і rate-limit нижче рахуватиме всіх користувачів як одного.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
-
 # Обмеження кількості спроб входу — захист від підбору пароля.
 # Рахує спроби по реальному IP клієнта (див. ProxyFix вище); при перевищенні повертає 429 Too Many Requests.
 limiter = Limiter(get_remote_address, app=app, default_limits=[])
-
-# Google Sheets
-_gs_client = None
-
-def get_client():
-    global _gs_client
-    if _gs_client is None:
-        creds_json = os.environ["GOOGLE_CREDENTIALS_JSON"]
-        info = json.loads(creds_json)
-        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-        creds = Credentials.from_service_account_info(info, scopes=scopes)
-        _gs_client = gspread.authorize(creds)
-    return _gs_client
-
-
 # Кеш курсів НБУ {(currency, date_iso): rate}
 _exchange_rates_cache = {}
 # Скільки одночасних запитів до НБУ дозволяємо при пре-фетчі курсів.
@@ -1332,11 +1396,6 @@ def currency_rates():
 @login_required
 def get_categories_endpoint():
     return jsonify(CATEGORIES)
-
-
-def save_categories():
-    with open("categories.json", "w", encoding="utf-8") as f:
-        json.dump(CATEGORIES, f, ensure_ascii=False, indent=2)
 
 
 # Автодобавлення emoji до категорій/підкатегорій без неї (через OpenAI)
