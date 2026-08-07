@@ -15,7 +15,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
 import gspread
 from google.oauth2.service_account import Credentials
-from config import COLUMN_ORDER, DELETED_COLUMN_ORDER, WORKSHEET_EXPENSE, WORKSHEET_INCOME, WORKSHEET_DELETED
+from config import COLUMN_ORDER, DELETED_COLUMN_ORDER, WORKSHEET_EXPENSE, WORKSHEET_INCOME, WORKSHEET_DELETED, WORKSHEET_CATEGORIES
 
 # Кешування частоти категорій (раз на день)
 _category_frequency_cache = None
