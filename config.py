@@ -1,58 +1,6 @@
 WORKSHEET_EXPENSE = "Витрати"
-
 WORKSHEET_INCOME = "Доходи"
-
 WORKSHEET_DELETED = "Deleted"
-
+WORKSHEET_CATEGORIES = "Categories"
 COLUMN_ORDER = ["date", "category", "amount", "note", "submitted_at", "added_at", "updated_at", "device_info", "split_id", "split_info", "subcategory"]
-
 DELETED_COLUMN_ORDER = ["date", "category", "amount", "note", "submitted_at", "added_at", "updated_at", "device_info", "deleted_at", "income_or_expense", "split_id", "split_info", "subcategory"]
-
-CATEGORIES = {
-    "expense": [
-        "🛒 Продукти",
-        "🚗 Транспорт",
-        "🎁 Подарунки",
-        "🏠 Господарство",
-        "💸 Комісія",
-        "📦 Доставка",
-        "🍽️ Кафе / ресторани / кава",
-        "🎭 Розваги",
-        "💻 Техніка",
-        "📌 Інше",
-        "💱 Різниця курсів",
-        "💊 Медицина",
-        "🏡 Житло",
-        "📚 Книжки",
-        "📞 Телефон",
-        "👕 Одяг",
-        "✂️ Перукарня",
-        "🐾 Тварини",
-        "✈️ Подорож",
-        "🤝 Благодійність",
-        "🎵 Музика",
-        "💳 Підписки",
-        "🎓 Навчання",
-        "📈 Інвестиції",
-        "🌐 Інтернет",
-        "🛍️ Одноразова покупка",
-        "⚔️ Зброя",
-        "🛋️ Меблі",
-        "🧾 Податки",
-        "🥣 Посуд",
-        "⚽ Спорт"
-    ],
-    "income": [
-        "💰 Відсотки",
-        "💵 Кешбек",
-        "💼 Зарплата",
-        "🔄 Повернення коштів",
-        "👨 Переказ від родичів",
-        "📈 Інвестиції",
-        "🎓 Стипендія",
-        "💱 Різниця курсів",
-        "💸 Готівка від родичів",
-        "📌 Інше",
-        "📜 ОВДП"
-    ],
-}
