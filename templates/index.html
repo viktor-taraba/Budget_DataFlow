@@ -25,6 +25,7 @@
 	<div class="brand__actions">
 	  <button type="button" class="theme-toggle" id="categories-toggle" aria-label="Керування категоріями" title="Керування категоріями">⚙️</button>
 	  <button type="button" class="theme-toggle" id="stats-toggle" aria-label="Статистика" title="Статистика">📊</button>
+	  <button type="button" class="theme-toggle" id="report-toggle" aria-label="Надіслати звіт на пошту" title="Надіслати звіт на пошту">📧</button>
 	  <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Перемкнути тему" title="Перемкнути світлу/темну тему">🌙</button>
 	</div>
   </div>
@@ -229,6 +230,33 @@
 		  <div class="categories-list" id="subcategories-list"></div>
 		</div>
 		<div class="categories-error" id="categories-error" hidden></div>
+	  </div>
+	</div>
+  </div>
+
+  {#
+    Модальне вікно надсилання звіту на пошту. За вибраний період (доступний
+    "наздоганяючий" лист за вчора теж проходить через ту саму send_report_email,
+    але надсилається автоматично при першому запиті процесу — тут лише ручний шлях).
+  #}
+  <div class="categories-overlay" id="report-overlay" hidden>
+	<div class="categories-dialog" role="dialog" aria-modal="true" aria-labelledby="report-title">
+	  <div class="categories-dialog__header">
+		<h2 id="report-title" class="categories-dialog__title">Надіслати звіт на пошту</h2>
+		<button type="button" class="categories-close" id="report-close" aria-label="Закрити">✕</button>
+	  </div>
+	  <div class="categories-body">
+		<form method="post" action="{{ url_for('send_report_route') }}">
+		  <div class="field">
+			<label class="field-label" for="report-start">Від дати</label>
+			<input type="date" id="report-start" name="start" max="{{ today }}" required>
+		  </div>
+		  <div class="field">
+			<label class="field-label" for="report-end">До дати</label>
+			<input type="date" id="report-end" name="end" max="{{ today }}" required>
+		  </div>
+		  <button class="submit-btn" type="submit">Надіслати</button>
+		</form>
 	  </div>
 	</div>
   </div>
@@ -977,6 +1005,23 @@
 			  overlay.hidden = false;
 			  loadCategories();
 		  });
+	  })();
+  </script>
+
+  <script>
+	  // Надсилання звіту на пошту за обраний період
+	  (function () {
+		  const overlay = document.getElementById('report-overlay');
+		  const startInput = document.getElementById('report-start');
+		  const endInput = document.getElementById('report-end');
+
+		  document.getElementById('report-toggle').addEventListener('click', () => {
+			  if (!startInput.value) startInput.value = "{{ today }}";
+			  if (!endInput.value) endInput.value = "{{ today }}";
+			  overlay.hidden = false;
+		  });
+		  document.getElementById('report-close').addEventListener('click', () => { overlay.hidden = true; });
+		  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.hidden = true; });
 	  })();
   </script>
 

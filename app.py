@@ -2,6 +2,7 @@ import os
 import json
 import re
 import subprocess
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
@@ -687,6 +688,216 @@ def get_period_stats(ws_name: str, start_date: str, end_date: str, currency: str
         return _aggregate_stats_foreign(entries, start_date, end_date, currency)
     else:
         return _aggregate_stats(entries, start_date, end_date)
+
+
+# Звіт електронною поштою — надсилається через Resend (https://resend.com),
+# не Gmail SMTP: send-only API-ключ структурно не має доступу до жодної
+# поштової скриньки (на відміну від Gmail App Password, який працює і для
+# SMTP, і для IMAP) — тому нема чого читати, навіть якщо ключ витече.
+#
+# Два шляхи надсилання:
+# 1. "Наздоганяючий" лист за вчора — при першому запиті кожного нового
+#    процесу (справжній "рівно о 22:00" планувальник ненадійний на
+#    безкоштовному Render: дайн засинає і не прокинеться по годиннику).
+#    Стан "чи вже надіслано" зберігається у daily_report_state.json, щоб
+#    повторний запит того самого процесу (чи наступний деплой) не дублював
+#    лист; якщо відправка не вдалась, стан не пишеться, і наступний запит
+#    спробує ще раз.
+# 2. За вимогою користувача через кнопку 📧 в інтерфейсі — на довільний
+#    період, без жодного стану.
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
+RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "onboarding@resend.dev")
+DAILY_REPORT_EMAIL = os.environ.get("DAILY_REPORT_EMAIL")
+
+DAILY_REPORT_STATE_PATH = "daily_report_state.json"
+
+
+def _load_daily_report_state() -> dict:
+    try:
+        with open(DAILY_REPORT_STATE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_daily_report_state(state: dict) -> None:
+    with open(DAILY_REPORT_STATE_PATH, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+def get_period_summary(start_date: str, end_date: str) -> dict:
+    """
+    Підсумок операцій за період [start_date, end_date] включно, з обох
+    аркушів: кількість операцій, сума доходів, сума витрат, чистий результат.
+    При start_date == end_date це підсумок за один день.
+
+    Рядки розбивки рахуються по рядку аркуша (одна категорія = одна
+    операція), так само, як суми рахує _aggregate_stats.
+    """
+    client = get_client()
+    sheet = client.open_by_key(SHEET_ID)
+
+    count = 0
+    income_total = 0.0
+    expense_total = 0.0
+
+    for entry_type, ws_name in (("income", WORKSHEET_INCOME), ("expense", WORKSHEET_EXPENSE)):
+        ws = sheet.worksheet(ws_name)
+        for entry in _all_entries(ws.get_all_values()):
+            entry_date = entry.get("date", "")
+            if not (start_date <= entry_date <= end_date):
+                continue
+            amount = validate_amount(entry.get("amount"))
+            if amount is None:
+                continue
+            count += 1
+            if entry_type == "income":
+                income_total += amount
+            else:
+                expense_total += amount
+
+    return {
+        "start": start_date,
+        "end": end_date,
+        "count": count,
+        "income": round(income_total, 2),
+        "expense": round(expense_total, 2),
+        "net": round(income_total - expense_total, 2),
+    }
+
+
+def _format_uah(value: float) -> str:
+    return f"{value:,.2f}".replace(",", " ").replace(".", ",") + " ₴"
+
+
+def _report_period_label(summary: dict) -> str:
+    return summary["start"] if summary["start"] == summary["end"] else f"{summary['start']} – {summary['end']}"
+
+
+def render_report_text(summary: dict) -> str:
+    """Текстовий варіант (для клієнтів без HTML) у command-line стилі."""
+    sign = "+" if summary["net"] >= 0 else "−"
+    return "\n".join([
+        f"$ budget --report --period {_report_period_label(summary)}",
+        "-" * 34,
+        f"  TRANSACTIONS ... {summary['count']}",
+        f"  INCOME ......... {_format_uah(summary['income'])}",
+        f"  EXPENSE ........ {_format_uah(summary['expense'])}",
+        f"  NET ............ {sign}{_format_uah(abs(summary['net']))}",
+        "-" * 34,
+    ])
+
+
+def render_report_html(summary: dict) -> str:
+    """HTML-версія в термінальному стилі: моноширинний шрифт, темне тло."""
+    sign = "+" if summary["net"] >= 0 else "−"
+    net_color = "#57B98B" if summary["net"] >= 0 else "#E0825E"
+    body = (
+        f"$ budget --report --period {_report_period_label(summary)}\n"
+        f"{'-' * 34}\n"
+        f"  TRANSACTIONS ... {summary['count']}\n"
+        f"  INCOME ......... {_format_uah(summary['income'])}\n"
+        f"  EXPENSE ........ {_format_uah(summary['expense'])}\n"
+        f"  NET ............ <span style=\"color:{net_color}\">{sign}{_format_uah(abs(summary['net']))}</span>\n"
+        f"{'-' * 34}"
+    )
+    return (
+        "<!DOCTYPE html><html><body style=\"margin:0;padding:24px;background:#0d1117;\">"
+        "<pre style=\"font-family:'JetBrains Mono','Courier New',monospace;font-size:14px;"
+        "line-height:1.5;color:#c9d1d9;background:#0d1117;margin:0;white-space:pre-wrap;\">"
+        f"{body}</pre></body></html>"
+    )
+
+
+def send_report_email(start_date: str, end_date: str) -> bool:
+    """
+    Надсилає лист зі статистикою за [start_date, end_date] на
+    DAILY_REPORT_EMAIL через Resend API
+    (https://resend.com/docs/api-reference/emails/send-email).
+
+    Повертає False без надсилання, якщо email/API-ключ не налаштовані —
+    те саме "тихо вимкнено без ключа", що й OpenAI-інтеграція.
+    Кидає виняток при мережевій помилці чи неуспішній відповіді API —
+    викликач (maybe_send_yesterday_report / send_report_route) сам вирішує,
+    як це обробити.
+    """
+    if not (DAILY_REPORT_EMAIL and RESEND_API_KEY):
+        return False
+
+    summary = get_period_summary(start_date, end_date)
+
+    response = requests.post(
+        "https://api.resend.com/emails",
+        headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "from": RESEND_FROM_EMAIL,
+            "to": [DAILY_REPORT_EMAIL],
+            "subject": f"Бюджет · звіт за {_report_period_label(summary)}",
+            "text": render_report_text(summary),
+            "html": render_report_html(summary),
+        },
+        timeout=10,
+    )
+    response.raise_for_status()
+    return True
+
+
+# "Наздоганяючий" лист за вчора. _daily_report_confirmed_date кешує в пам'яті
+# процесу дату, за яку вже точно підтверджено відправку, щоб не читати
+# daily_report_state.json на кожен запит; _daily_report_lock захищає від
+# гонки, якщо кілька запитів прийдуть одночасно одразу після старту процесу.
+_daily_report_lock = threading.Lock()
+_daily_report_confirmed_date = None
+
+
+def maybe_send_yesterday_report():
+    """
+    Якщо звіт за вчорашній день (за Києвом) ще не надіслано — надсилає його
+    зараз. Стан ("за яку дату востаннє надіслано") зберігається у
+    daily_report_state.json, щоб повторний виклик (наступний запит, новий
+    деплой) не дублював лист.
+
+    Примітка: цей файл, як і categories.json, живе на диску процесу — на
+    Render без persistent-диску він не переживає редеплой, тож зрідка після
+    деплою можливий один зайвий лист. Це прийнятний компроміс для
+    однокористувацького застосунку.
+    """
+    global _daily_report_confirmed_date
+
+    if not (DAILY_REPORT_EMAIL and RESEND_API_KEY):
+        return
+
+    yesterday = (today_kyiv() - timedelta(days=1)).isoformat()
+    if _daily_report_confirmed_date == yesterday:
+        return  # вже підтверджено в цьому процесі — не читаємо файл повторно
+
+    with _daily_report_lock:
+        if _daily_report_confirmed_date == yesterday:
+            return
+
+        state = _load_daily_report_state()
+        if state.get("last_sent_date") == yesterday:
+            _daily_report_confirmed_date = yesterday
+            return
+
+        try:
+            sent = send_report_email(yesterday, yesterday)
+        except Exception:
+            sent = False
+
+        if sent:
+            _save_daily_report_state({"last_sent_date": yesterday})
+            _daily_report_confirmed_date = yesterday
+        # Якщо не вдалось — нічого не зберігаємо й не кешуємо, наступний
+        # запит (наприклад, коли дайн прокинеться знову) спробує ще раз.
+
+
+@app.before_request
+def _maybe_send_yesterday_report_hook():
+    maybe_send_yesterday_report()
 
 
 # Видалення записів
@@ -1390,6 +1601,34 @@ def currency_rates():
         result["warning"] = warning
 
     return jsonify(result)
+
+
+@app.route("/reports/send", methods=["POST"])
+@login_required
+def send_report_route():
+    """Надсилає звіт за обраний користувачем період негайно, на вимогу (кнопка 📧)."""
+    start_date = validate_date(request.form.get("start"))
+    end_date = validate_date(request.form.get("end") or request.form.get("start"))
+
+    if start_date is None or end_date is None:
+        flash("Некоректна дата звіту")
+        return redirect(url_for("index"))
+
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
+    if not (DAILY_REPORT_EMAIL and RESEND_API_KEY):
+        flash("Розсилку звітів не налаштовано (немає RESEND_API_KEY/email у середовищі)")
+        return redirect(url_for("index"))
+
+    try:
+        sent = send_report_email(start_date, end_date)
+    except Exception as exc:
+        flash(f"Помилка надсилання звіту: {exc}")
+        return redirect(url_for("index"))
+
+    flash("Звіт надіслано на пошту" if sent else "Не вдалося надіслати звіт", "success" if sent else None)
+    return redirect(url_for("index"))
 
 
 @app.route("/categories", methods=["GET"])

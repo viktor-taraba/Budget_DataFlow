@@ -225,6 +225,10 @@ credentials.json
 /to_do.md
 /test_.zip
 
+# Стан "чи вже надіслано звіт за вчора" (daily-report catch-up) — runtime,
+# не джерело істини; при відсутності просто наздожене відправку на наступному запиті.
+daily_report_state.json
+
 # Excel files (temporary imports, local backups)
 *.xlsx
 *.xls
