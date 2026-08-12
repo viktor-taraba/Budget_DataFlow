@@ -121,6 +121,89 @@ class TestGetPeriodSummary:
         assert summary["count"] == 0
         assert summary["expense"] == 0.0
 
+    def test_includes_category_breakdown_for_income_and_expense(self, monkeypatch):
+        expense_rows = sheet_rows(
+            {"date": "2026-07-05", "category": "🛒 Продукти", "amount": "100"},
+            {"date": "2026-07-05", "category": "🛒 Продукти", "amount": "50"},
+            {"date": "2026-07-05", "category": "🚗 Транспорт", "amount": "30"},
+        )
+        income_rows = sheet_rows(
+            {"date": "2026-07-05", "category": "💼 Зарплата", "amount": "1000"},
+            {"date": "2026-07-05", "category": "💰 Відсотки", "amount": "5"},
+        )
+        client = FakeClient(
+            {
+                app_module.WORKSHEET_EXPENSE: FakeWorksheet(expense_rows),
+                app_module.WORKSHEET_INCOME: FakeWorksheet(income_rows),})
+        monkeypatch.setattr(app_module, "get_client", lambda: client)
+
+        summary = get_period_summary("2026-07-05", "2026-07-05")
+
+        assert summary["categories"]["expense"] == [
+            {"category": "🛒 Продукти", "amount": 150.0},
+            {"category": "🚗 Транспорт", "amount": 30.0},
+        ]
+        assert summary["categories"]["income"] == [
+            {"category": "💼 Зарплата", "amount": 1000.0},
+            {"category": "💰 Відсотки", "amount": 5.0},
+        ]
+
+    def test_includes_full_transaction_list(self, monkeypatch):
+        expense_rows = sheet_rows(
+            {"date": "2026-07-05", "category": "🛒 Продукти", "amount": "100"},
+        )
+        income_rows = sheet_rows(
+            {"date": "2026-07-06", "category": "💼 Зарплата", "amount": "1000"},
+        )
+        client = FakeClient(
+            {
+                app_module.WORKSHEET_EXPENSE: FakeWorksheet(expense_rows),
+                app_module.WORKSHEET_INCOME: FakeWorksheet(income_rows),})
+        monkeypatch.setattr(app_module, "get_client", lambda: client)
+
+        summary = get_period_summary("2026-07-01", "2026-07-31")
+
+        assert len(summary["transactions"]) == 2
+        assert summary["transactions"][0]["date"] == "2026-07-05"
+        assert summary["transactions"][0]["category"] == "🛒 Продукти"
+        assert summary["transactions"][0]["type"] == "expense"
+        assert summary["transactions"][1]["date"] == "2026-07-06"
+
+    def test_include_transactions_true_for_short_period(self, monkeypatch):
+        client = FakeClient(
+            {
+                app_module.WORKSHEET_EXPENSE: FakeWorksheet(sheet_rows()),
+                app_module.WORKSHEET_INCOME: FakeWorksheet(sheet_rows()),})
+        monkeypatch.setattr(app_module, "get_client", lambda: client)
+
+        # 20.06 - 05.07 охоплює 2 календарні місяці (червень, липень)
+        summary = get_period_summary("2026-06-20", "2026-07-05")
+        assert summary["include_transactions"] is True
+
+    def test_include_transactions_false_for_long_period(self, monkeypatch):
+        client = FakeClient(
+            {
+                app_module.WORKSHEET_EXPENSE: FakeWorksheet(sheet_rows()),
+                app_module.WORKSHEET_INCOME: FakeWorksheet(sheet_rows()),})
+        monkeypatch.setattr(app_module, "get_client", lambda: client)
+
+        # Січень - Березень охоплює 3 календарні місяці
+        summary = get_period_summary("2026-01-01", "2026-03-31")
+        assert summary["include_transactions"] is False
+
+
+class TestSpansAtMostNCalendarMonths:
+    def test_single_day_is_one_month(self):
+        assert app_module._spans_at_most_n_calendar_months("2026-07-05", "2026-07-05", 2) is True
+
+    def test_two_calendar_months_is_within_limit(self):
+        assert app_module._spans_at_most_n_calendar_months("2026-06-20", "2026-07-05", 2) is True
+
+    def test_three_calendar_months_exceeds_limit(self):
+        assert app_module._spans_at_most_n_calendar_months("2026-01-01", "2026-03-31", 2) is False
+
+    def test_year_boundary(self):
+        assert app_module._spans_at_most_n_calendar_months("2025-12-15", "2026-01-05", 2) is True
 
 class TestRenderReport:
     def test_text_report_uses_command_line_style(self):
@@ -146,6 +229,72 @@ class TestRenderReport:
         assert "JetBrains Mono" in html
         assert "#0d1117" in html
         assert "TRANSACTIONS ... 1" in html
+
+    def test_summary_without_categories_or_transactions_omits_those_sections(self):
+        # Ручний summary (без categories/transactions) — так само, як у тестах
+        # вище: секції просто не додаються, базовий блок лишається як раніше.
+        summary = {"start": "2026-08-06", "end": "2026-08-06", "count": 1, "income": 100.0, "expense": 0.0, "net": 100.0}
+        text = render_report_text(summary)
+        assert "BY CATEGORY" not in text
+        assert "TRANSACTION LIST" not in text
+
+    def test_text_report_includes_category_breakdown(self):
+        summary = {
+            "start": "2026-08-06", "end": "2026-08-06", "count": 2,
+            "income": 1000.0, "expense": 100.0, "net": 900.0,
+            "categories": {
+                "income": [{"category": "💼 Зарплата", "amount": 1000.0}],
+                "expense": [{"category": "🛒 Продукти", "amount": 100.0}],
+            },
+            "transactions": [],
+            "include_transactions": True,}
+        text = render_report_text(summary)
+        assert "INCOME BY CATEGORY" in text
+        assert "💼 Зарплата" in text
+        assert "EXPENSE BY CATEGORY" in text
+        assert "🛒 Продукти" in text
+
+    def test_text_report_includes_transaction_list_for_short_period(self):
+        summary = {
+            "start": "2026-08-01", "end": "2026-08-06", "count": 1,
+            "income": 0.0, "expense": 100.0, "net": -100.0,
+            "categories": {"income": [], "expense": [{"category": "🛒 Продукти", "amount": 100.0}]},
+            "transactions": [
+                {"date": "2026-08-03", "type": "expense", "category": "🛒 Продукти", "amount": 100.0, "note": ""},
+            ],
+            "include_transactions": True,}
+        text = render_report_text(summary)
+        assert "TRANSACTION LIST" in text
+        assert "2026-08-03" in text
+        assert "🛒 Продукти" in text
+
+    def test_text_report_omits_transaction_list_for_long_period(self):
+        summary = {
+            "start": "2026-01-01", "end": "2026-03-31", "count": 1,
+            "income": 0.0, "expense": 100.0, "net": -100.0,
+            "categories": {"income": [], "expense": [{"category": "🛒 Продукти", "amount": 100.0}]},
+            "transactions": [
+                {"date": "2026-02-03", "type": "expense", "category": "🛒 Продукти", "amount": 100.0, "note": ""},
+            ],
+            "include_transactions": False,}
+        text = render_report_text(summary)
+        assert "TRANSACTION LIST" not in text
+        # Категорії все одно показуємо — обмеження стосується лише деталізованого списку.
+        assert "EXPENSE BY CATEGORY" in text
+
+    def test_html_report_includes_category_and_transaction_sections(self):
+        summary = {
+            "start": "2026-08-01", "end": "2026-08-06", "count": 1,
+            "income": 0.0, "expense": 100.0, "net": -100.0,
+            "categories": {"income": [], "expense": [{"category": "🛒 Продукти", "amount": 100.0}]},
+            "transactions": [
+                {"date": "2026-08-03", "type": "expense", "category": "🛒 Продукти", "amount": 100.0, "note": ""},
+            ],
+            "include_transactions": True,
+        }
+        html = render_report_html(summary)
+        assert "EXPENSE BY CATEGORY" in html
+        assert "TRANSACTION LIST" in html
 
 
 class TestSendReportEmail:
