@@ -234,18 +234,25 @@
 	</div>
   </div>
 
-  {#
-    Модальне вікно надсилання звіту на пошту. За вибраний період (доступний
-    "наздоганяючий" лист за вчора теж проходить через ту саму send_report_email,
-    але надсилається автоматично при першому запиті процесу — тут лише ручний шлях).
-  #}
-  <div class="categories-overlay" id="report-overlay" hidden>
+	{#
+	Модальне вікно надсилання звіту на пошту. За вибраний період (доступний
+	"наздоганяючий" лист за вчора теж проходить через ту саму send_report_email,
+	але надсилається автоматично при першому запиті процесу — тут лише ручний шлях).
+	Кнопки-пресети (як на сторінці статистики) заповнюють поля дат — не
+	надсилають форму самі, щоб дати можна було перевірити перед відправкою.
+	#}
+	<div class="categories-overlay" id="report-overlay" hidden>
 	<div class="categories-dialog" role="dialog" aria-modal="true" aria-labelledby="report-title">
 	  <div class="categories-dialog__header">
 		<h2 id="report-title" class="categories-dialog__title">Надіслати звіт на пошту</h2>
 		<button type="button" class="categories-close" id="report-close" aria-label="Закрити">✕</button>
 	  </div>
 	  <div class="categories-body">
+		  <div class="stats-presets" role="group" aria-label="Період звіту" id="report-presets">
+			<button type="button" class="stats-preset" data-report-days="7">Останній тиждень</button>
+			<button type="button" class="stats-preset" data-report-period="current-month">Поточний місяць</button>
+			<button type="button" class="stats-preset" data-report-period="previous-month">Попередній місяць</button>
+		  </div>
 		<form method="post" action="{{ url_for('send_report_route') }}">
 		  <div class="field">
 			<label class="field-label" for="report-start">Від дати</label>
@@ -1011,17 +1018,70 @@
   <script>
 	  // Надсилання звіту на пошту за обраний період
 	  (function () {
-		  const overlay = document.getElementById('report-overlay');
-		  const startInput = document.getElementById('report-start');
-		  const endInput = document.getElementById('report-end');
+	  const overlay = document.getElementById('report-overlay');
+	  const startInput = document.getElementById('report-start');
+	  const endInput = document.getElementById('report-end');
+	  const presetButtons = document.querySelectorAll('#report-presets .stats-preset');
 
-		  document.getElementById('report-toggle').addEventListener('click', () => {
-			  if (!startInput.value) startInput.value = "{{ today }}";
-			  if (!endInput.value) endInput.value = "{{ today }}";
-			  overlay.hidden = false;
-		  });
-		  document.getElementById('report-close').addEventListener('click', () => { overlay.hidden = true; });
-		  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.hidden = true; });
+	  function formatLocalDate(value) {
+	  const year = value.getFullYear();
+	  const month = String(value.getMonth() + 1).padStart(2, '0');
+	  const day = String(value.getDate()).padStart(2, '0');
+	  return `${year}-${month}-${day}`;
+	  }
+
+	  function isoDaysAgo(days) {
+	  const d = new Date();
+	  d.setDate(d.getDate() - days);
+	  return formatLocalDate(d);
+	  }
+
+	  function setActiveReportPreset(activeButton) {
+	  presetButtons.forEach((btn) => btn.classList.toggle('is-active', btn === activeButton));
+	  }
+
+	  function clearActiveReportPreset() {
+	  presetButtons.forEach((btn) => btn.classList.remove('is-active'));
+	  }
+
+	  // Пресети лише заповнюють поля дат — надсилання лишається окремою
+	  // дією (кнопка "Надіслати"), щоб період можна було перевірити,
+	  // перш ніж лист піде.
+	  presetButtons.forEach((btn) => {
+	  btn.addEventListener('click', () => {
+	  setActiveReportPreset(btn);
+
+	  if (btn.dataset.reportDays) {
+	  const days = Number(btn.dataset.reportDays);
+	  startInput.value = isoDaysAgo(days - 1);
+	  endInput.value = isoDaysAgo(0);
+	  return;
+	  }
+
+	  const today = new Date();
+	  const isPreviousMonth = btn.dataset.reportPeriod === 'previous-month';
+	  const start = new Date(today.getFullYear(), today.getMonth() - (isPreviousMonth ? 1 : 0), 1);
+	  const end = isPreviousMonth
+	  ? new Date(today.getFullYear(), today.getMonth(), 0)
+	  : today;
+	  startInput.value = formatLocalDate(start);
+	  endInput.value = formatLocalDate(end);
+	  });
+	  });
+
+	  // Ручна зміна дати означає "свій період" — знімаємо позначку з пресетів.
+	  [startInput, endInput].forEach((input) => {
+	  input.addEventListener('input', clearActiveReportPreset);
+	  });
+
+	  document.getElementById('report-toggle').addEventListener('click', () => {
+	  if (!startInput.value) startInput.value = "{{ today }}";
+	  if (!endInput.value) endInput.value = "{{ today }}";
+	  clearActiveReportPreset();
+	  overlay.hidden = false;
+	  });
+	  document.getElementById('report-close').addEventListener('click', () => { overlay.hidden = true; });
+	  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.hidden = true; });
 	  })();
   </script>
 

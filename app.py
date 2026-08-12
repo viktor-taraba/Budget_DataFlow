@@ -725,21 +725,39 @@ def _save_daily_report_state(state: dict) -> None:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
+def _spans_at_most_n_calendar_months(start_date: str, end_date: str, n: int) -> bool:
+    """
+    Чи вкладається [start_date, end_date] у щонайбільше `n` календарних
+    місяців (місяці рахуються як окремі "комірки" рік-місяць, які період
+    зачіпає — напр. 20.01–05.02 це 2 місяці, а 01.01–31.03 це вже 3).
+
+    Використовується, щоб вирішити, чи додавати повний список операцій до
+    листа-звіту: за довший період список був би завеликий для листа.
+    """
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    months_spanned = (end.year - start.year) * 12 + (end.month - start.month) + 1
+    return months_spanned <= n
+
+
 def get_period_summary(start_date: str, end_date: str) -> dict:
     """
     Підсумок операцій за період [start_date, end_date] включно, з обох
-    аркушів: кількість операцій, сума доходів, сума витрат, чистий результат.
-    При start_date == end_date це підсумок за один день.
+    аркушів: кількість операцій, сума доходів/витрат, чистий результат, суми
+    по категоріях (окремо доходи/витрати) і повний список операцій.
 
-    Рядки розбивки рахуються по рядку аркуша (одна категорія = одна
-    операція), так само, як суми рахує _aggregate_stats.
+    `include_transactions` каже, чи період достатньо короткий (щонайбільше 2
+    календарних місяці — див. _spans_at_most_n_calendar_months), щоб додати
+    список усіх операцій до листа; сам список рахується завжди (дешево —
+    ті самі рядки, які й так уже прочитані для сум), рішення "показувати чи
+    ні" — окремо, у render_report_text/html.
     """
     client = get_client()
     sheet = client.open_by_key(SHEET_ID)
 
-    count = 0
-    income_total = 0.0
-    expense_total = 0.0
+    count, income_total, expense_total = 0, 0.0, 0.0
+    category_totals = {"income": {}, "expense": {}}
+    transactions = []
 
     for entry_type, ws_name in (("income", WORKSHEET_INCOME), ("expense", WORKSHEET_EXPENSE)):
         ws = sheet.worksheet(ws_name)
@@ -750,11 +768,29 @@ def get_period_summary(start_date: str, end_date: str) -> dict:
             amount = validate_amount(entry.get("amount"))
             if amount is None:
                 continue
+
             count += 1
+            category = entry.get("category") or "Інше"
+            category_totals[entry_type][category] = category_totals[entry_type].get(category, 0.0) + amount
+            transactions.append({
+                "date": entry_date,
+                "type": entry_type,
+                "category": category,
+                "amount": amount,
+                "note": entry.get("note", ""),
+            })
             if entry_type == "income":
                 income_total += amount
             else:
                 expense_total += amount
+
+    categories = {
+        kind: sorted(
+            ({"category": c, "amount": round(a, 2)} for c, a in totals.items()),
+            key=lambda item: item["amount"],
+            reverse=True)
+        for kind, totals in category_totals.items()}
+    transactions.sort(key=lambda t: (t["date"], t["type"]))
 
     return {
         "start": start_date,
@@ -763,6 +799,9 @@ def get_period_summary(start_date: str, end_date: str) -> dict:
         "income": round(income_total, 2),
         "expense": round(expense_total, 2),
         "net": round(income_total - expense_total, 2),
+        "categories": categories,
+        "transactions": transactions,
+        "include_transactions": _spans_at_most_n_calendar_months(start_date, end_date, 2),
     }
 
 
@@ -774,33 +813,78 @@ def _report_period_label(summary: dict) -> str:
     return summary["start"] if summary["start"] == summary["end"] else f"{summary['start']} – {summary['end']}"
 
 
+def _format_category_line(category: str, amount: float, width: int = 22) -> str:
+    pad_len = max(1, width - len(category))
+    return f"  {category} {'.' * pad_len} {_format_uah(amount)}"
+
+
+def _format_transaction_line(transaction: dict, width: int = 22) -> str:
+    sign = "+" if transaction["type"] == "income" else "−"
+    category = transaction["category"]
+    pad_len = max(1, width - len(category))
+    return f"  {transaction['date']}  {sign} {category} {'.' * pad_len} {_format_uah(transaction['amount'])}"
+
+
+def _report_extra_sections(summary: dict) -> list:
+    """
+    Секції зі списком категорій і (для короткого періоду) усіх операцій —
+    спільна логіка text/html версій листа. Якщо `summary` не несе
+    "categories"/"transactions" (напр. переданий вручну в тестах), секції
+    просто не додаються — базовий підсумковий блок лишається як раніше.
+    """
+    lines = []
+    categories = summary.get("categories") or {}
+    income_categories = categories.get("income") or []
+    expense_categories = categories.get("expense") or []
+
+    if income_categories:
+        lines.append("")
+        lines.append("  INCOME BY CATEGORY")
+        lines.extend(_format_category_line(item["category"], item["amount"]) for item in income_categories)
+
+    if expense_categories:
+        lines.append("")
+        lines.append("  EXPENSE BY CATEGORY")
+        lines.extend(_format_category_line(item["category"], item["amount"]) for item in expense_categories)
+
+    transactions = summary.get("transactions") or []
+    if summary.get("include_transactions") and transactions:
+        lines.append("")
+        lines.append("  TRANSACTION LIST")
+        lines.extend(_format_transaction_line(t) for t in transactions)
+
+    return lines
+
+
 def render_report_text(summary: dict) -> str:
     """Текстовий варіант (для клієнтів без HTML) у command-line стилі."""
     sign = "+" if summary["net"] >= 0 else "−"
-    return "\n".join([
+    lines = [
         f"$ budget --report --period {_report_period_label(summary)}",
         "-" * 34,
         f"  TRANSACTIONS ... {summary['count']}",
         f"  INCOME ......... {_format_uah(summary['income'])}",
         f"  EXPENSE ........ {_format_uah(summary['expense'])}",
         f"  NET ............ {sign}{_format_uah(abs(summary['net']))}",
-        "-" * 34,
-    ])
+        "-" * 34]
+    lines.extend(_report_extra_sections(summary))
+    return "\n".join(lines)
 
 
 def render_report_html(summary: dict) -> str:
     """HTML-версія в термінальному стилі: моноширинний шрифт, темне тло."""
     sign = "+" if summary["net"] >= 0 else "−"
     net_color = "#57B98B" if summary["net"] >= 0 else "#E0825E"
-    body = (
-        f"$ budget --report --period {_report_period_label(summary)}\n"
-        f"{'-' * 34}\n"
-        f"  TRANSACTIONS ... {summary['count']}\n"
-        f"  INCOME ......... {_format_uah(summary['income'])}\n"
-        f"  EXPENSE ........ {_format_uah(summary['expense'])}\n"
-        f"  NET ............ <span style=\"color:{net_color}\">{sign}{_format_uah(abs(summary['net']))}</span>\n"
-        f"{'-' * 34}"
-    )
+    lines = [
+        f"$ budget --report --period {_report_period_label(summary)}",
+        "-" * 34,
+        f"  TRANSACTIONS ... {summary['count']}",
+        f"  INCOME ......... {_format_uah(summary['income'])}",
+        f"  EXPENSE ........ {_format_uah(summary['expense'])}",
+        f"  NET ............ <span style=\"color:{net_color}\">{sign}{_format_uah(abs(summary['net']))}</span>",
+        "-" * 34]
+    lines.extend(_report_extra_sections(summary))
+    body = "\n".join(lines)
     return (
         "<!DOCTYPE html><html><body style=\"margin:0;padding:24px;background:#0d1117;\">"
         "<pre style=\"font-family:'JetBrains Mono','Courier New',monospace;font-size:14px;"
