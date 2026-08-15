@@ -51,11 +51,17 @@
       </div>
 
       <div class="field">
-        <label class="field-label" for="amount">Сума</label>
+        <label class="field-label" for="amount" id="amount-field-label">Сума</label>
         <div class="amount-wrap">
-          <span class="currency">₴</span>
+          <span class="currency" id="amount-currency-symbol">₴</span>
           <input type="text" inputmode="decimal" id="amount" name="amount" placeholder="0" data-min="0.01" required="" autofocus="">
 	    </div>
+        <div class="currency-toggle" id="entry-currency-toggle" role="group" aria-label="Валюта суми">
+          <button type="button" class="currency-toggle__btn currency-toggle__btn--active" data-currency="UAH">₴ UAH</button>
+          <button type="button" class="currency-toggle__btn" data-currency="USD">$ USD</button>
+          <button type="button" class="currency-toggle__btn" data-currency="EUR">€ EUR</button>
+        </div>
+        <input type="hidden" id="entry-currency" name="currency" value="UAH">
       </div>
 
       <div class="field">
@@ -128,7 +134,8 @@
 					data-edit-date="{{ entry.date }}"
 					data-edit-category="{% if entry.split_count %}{{ entry.split_entries[0].category }}{% else %}{{ entry.category }}{% endif %}"
 					data-edit-subcategory="{% if entry.split_count %}{{ entry.split_entries[0].subcategory }}{% else %}{{ entry.subcategory }}{% endif %}"
-					data-edit-amount="{% if entry.split_count %}{{ entry.split_entries[0].amount }}{% else %}{{ entry.amount }}{% endif %}"
+					data-edit-amount="{% if entry.split_count %}{{ entry.split_entries[0].amount }}{% elif entry.currency and entry.currency != 'UAH' %}{{ entry.curr_amount }}{% else %}{{ entry.amount }}{% endif %}"
+					data-edit-currency="{% if entry.split_count %}UAH{% else %}{{ entry.currency or 'UAH' }}{% endif %}"
 					data-edit-note="{{ entry.note }}"
 					data-edit-fp-date="{{ entry.date }}"
 					data-edit-fp-category="{% if entry.split_count %}{{ entry.split_entries[0].category }}{% else %}{{ entry.category }}{% endif %}"
@@ -304,8 +311,14 @@
 		</div>
 
 		<div class="form-group" id="edit-amount-group">
-		  <label for="edit-amount">Сума (грн)</label>
+		  <label for="edit-amount" id="edit-amount-label">Сума (грн)</label>
 		  <input type="text" id="edit-amount" name="amount" placeholder="0.00" required>
+		  <div class="currency-toggle" id="edit-currency-toggle" role="group" aria-label="Валюта суми">
+			<button type="button" class="currency-toggle__btn currency-toggle__btn--active" data-currency="UAH">₴ UAH</button>
+			<button type="button" class="currency-toggle__btn" data-currency="USD">$ USD</button>
+			<button type="button" class="currency-toggle__btn" data-currency="EUR">€ EUR</button>
+		  </div>
+		  <input type="hidden" id="edit-currency" name="currency" value="UAH">
 		</div>
 
 		<div id="edit-split-form" hidden>
@@ -592,6 +605,36 @@
 		  document.getElementById('date').addEventListener('input', (e) => {
 		  e.target.setCustomValidity('');
 		  });
+
+		  // Перемикач валюти суми (₴ / $ / €). За замовчуванням — гривня;
+		  // лише коли обрано USD/EUR, поле "Сума" означає суму у валюті,
+		  // а гривневий еквівалент рахує сервер за курсом НБУ.
+		  (function () {
+			  const toggle = document.getElementById('entry-currency-toggle');
+			  const hiddenInput = document.getElementById('entry-currency');
+			  const symbolEl = document.getElementById('amount-currency-symbol');
+			  const labelEl = document.getElementById('amount-field-label');
+			  const buttons = toggle.querySelectorAll('.currency-toggle__btn');
+			  const symbols = { UAH: '₴', USD: '$', EUR: '€' };
+
+			  function setCurrency(code) {
+				  hiddenInput.value = code;
+				  symbolEl.textContent = symbols[code] || '₴';
+				  labelEl.textContent = code === 'UAH' ? 'Сума' : `Сума (у ${code})`;
+				  buttons.forEach((btn) => btn.classList.toggle('currency-toggle__btn--active', btn.dataset.currency === code));
+			  }
+
+			  buttons.forEach((btn) => btn.addEventListener('click', () => setCurrency(btn.dataset.currency)));
+
+			  // Розбиті операції не підтримують валюту — поки активна розбивка,
+			  // перемикач заблокований і скинутий на гривню.
+			  document.getElementById('split-toggle').addEventListener('change', (e) => {
+				  if (e.target.checked) {
+					  setCurrency('UAH');
+				  }
+				  buttons.forEach((btn) => { btn.disabled = e.target.checked; });
+			  });
+		  })();
 
 		  // Розгортання/приховування деталей розбивки
 		  document.querySelectorAll('.recent-split-expand').forEach((btn) => {
@@ -1107,9 +1150,25 @@
 		  const editSplitPairs = document.getElementById('edit-split-pairs');
 		  const editSplitAddBtn = document.getElementById('edit-split-add-btn');
 		  const editAmount = document.getElementById('edit-amount');
-		  const editAmountLabel = document.querySelector('label[for="edit-amount"]');
+		  const editAmountLabel = document.getElementById('edit-amount-label');
+		  const editCurrencyToggle = document.getElementById('edit-currency-toggle');
+		  const editCurrencyInput = document.getElementById('edit-currency');
+		  const editCurrencyButtons = editCurrencyToggle.querySelectorAll('.currency-toggle__btn');
+		  const CURRENCY_SYMBOLS = { UAH: '₴', USD: '$', EUR: '€' };
 		  let currentEditSplitEntries = null;
 		  let currentEditType = null;
+
+		  // Валюта суми в модалці редагування. Для split-записів перемикач
+		  // ховається (розбивка завжди в гривні — див. CLAUDE.md).
+		  function setEditCurrency(code) {
+			  editCurrencyInput.value = code;
+			  editCurrencyButtons.forEach((btn) => btn.classList.toggle('currency-toggle__btn--active', btn.dataset.currency === code));
+			  if (editAmountLabel.textContent.indexOf('Загальна сума') === -1) {
+				  editAmountLabel.textContent = code === 'UAH' ? 'Сума (грн)' : `Сума (у ${code})`;
+			  }
+		  }
+
+		  editCurrencyButtons.forEach((btn) => btn.addEventListener('click', () => setEditCurrency(btn.dataset.currency)));
 
 		  function populateCategories(type) {
 			  editCategorySelect.innerHTML = '<option value="">Виберіть категорію</option>';
@@ -1254,11 +1313,14 @@
 			  editCategoryGroup.style.display = '';
 			  editSubcategoryGroup.style.display = '';
 			  editAmountGroup.style.display = '';
+			  editAmountLabel.textContent = 'Сума (грн)';
 			  // form.reset() не чіпає disabled — знімаємо самі, інакше наступне
 			  // редагування звичайного запису відкриється із заблокованим полем.
 			  editCategorySelect.disabled = false;
 			  editSubcategorySelect.disabled = false;
 			  editAmount.disabled = false;
+			  editCurrencyToggle.style.display = '';
+			  setEditCurrency('UAH');
 			  currentEditSplitEntries = null;
 		  }
 
@@ -1296,6 +1358,7 @@
 			  const amount = editBtn.dataset.editAmount;
 			  const note = editBtn.dataset.editNote;
 			  const splitId = editBtn.dataset.editSplitId;
+		  const currency = editBtn.dataset.editCurrency || 'UAH';
 			  currentEditType = type;
 
 			  if (splitId) {
@@ -1346,17 +1409,21 @@
 				  editAmount.value = editBtn.dataset.editSplitTotal || amount;
 				  editSplitForm.hidden = false;
 				  renderEditSplitPairs(currentEditSplitEntries);
+				  // Розбивка завжди в гривні — перемикач валюти тут ховаємо і скидаємо.
+				  editCurrencyToggle.style.display = 'none';
+				  setEditCurrency('UAH');
 			  } else {
 				  editCategoryGroup.style.display = '';
 				  editSubcategoryGroup.style.display = '';
 				  editAmountGroup.style.display = '';
-				  editAmountLabel.textContent = 'Сума (грн)';
 				  editSplitForm.hidden = true;
 				  editCategorySelect.value = category;
 				  editCategorySelect.disabled = false;
 				  populateSubcategories(type, category, subcategory);
 				  editAmount.disabled = false;
 				  editAmount.value = amount;
+				  editCurrencyToggle.style.display = '';
+				  setEditCurrency(currency);
 			  }
 
 			  const fpCols = ['date', 'category', 'amount', 'added_at'];
