@@ -1192,3 +1192,12 @@ a.theme-toggle { text-decoration: none; }
   fill: var(--navy);
   outline: none;
 }
+.rate-chart__gridline {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.rate-chart__axis-label {
+  font-family: "JetBrains Mono", "Courier New", monospace;
+  font-size: 10px;
+  fill: var(--ink-soft);
+}

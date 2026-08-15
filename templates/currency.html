@@ -184,117 +184,145 @@
 			  container.innerHTML = '';
 
 			  const points = series.filter((p) => p.rate !== null && p.rate !== undefined);
-			  if (points.length === 0) {
-				  container.hidden = true;
-				  emptyEl.hidden = false;
-				  return;
-			  }
-			  container.hidden = false;
-			  emptyEl.hidden = true;
+	  if (points.length === 0) {
+	  container.hidden = true;
+	  emptyEl.hidden = false;
+	  return;
+	  }
+	  container.hidden = false;
+	  emptyEl.hidden = true;
 
-			  const width = container.clientWidth || 600;
-			  const height = 180;
-			  const values = points.map((p) => p.rate);
-			  const min = Math.min(...values);
-			  const max = Math.max(...values);
-			  const range = (max - min) || 1;
-			  const stepX = points.length > 1 ? width / (points.length - 1) : width;
+	  const width = container.clientWidth || 600;
+	  const height = 180;
+	  const values = points.map((p) => p.rate);
+	  const min = Math.min(...values);
+	  const max = Math.max(...values);
+	  const range = (max - min) || 1;
+	  // Резервуємо смугу зліва під підписи осі Y — сама лінія графіка малюється лише в решті ширини, праворуч від цієї смуги.
+	  const yAxisWidth = 46;
+	  const chartWidth = Math.max(width - yAxisWidth, 0);
+	  const stepX = points.length > 1 ? chartWidth / (points.length - 1) : chartWidth;
 
-			  const coords = points.map((p, i) => ({
-				  x: i * stepX,
-				  y: height - ((p.rate - min) / range) * (height - 24) - 12,
-				  date: p.date,
-				  rate: p.rate,
-			  }));
+	  const coords = points.map((p, i) => ({
+	  x: yAxisWidth + i * stepX,
+	  y: height - ((p.rate - min) / range) * (height - 24) - 12,
+	  date: p.date,
+	  rate: p.rate,
+	  }));
 
-			  const pathD = coords
-				  .map((pt, i) => `${i === 0 ? 'M' : 'L'} ${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`)
-				  .join(' ');
+	  const pathD = coords
+	  .map((pt, i) => `${i === 0 ? 'M' : 'L'} ${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`)
+	  .join(' ');
 
-			  const svgNS = 'http://www.w3.org/2000/svg';
-			  const svg = document.createElementNS(svgNS, 'svg');
-			  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-			  svg.setAttribute('preserveAspectRatio', 'none');
-			  svg.classList.add('rate-chart__svg');
+	  const svgNS = 'http://www.w3.org/2000/svg';
+	  const svg = document.createElementNS(svgNS, 'svg');
+	  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+	  svg.setAttribute('preserveAspectRatio', 'none');
+	  svg.classList.add('rate-chart__svg');
 
-			  const path = document.createElementNS(svgNS, 'path');
-			  path.setAttribute('d', pathD);
-			  path.setAttribute('class', 'rate-chart__line');
-			  svg.appendChild(path);
+	  // Вісь Y: 4 позначки (макс, дві проміжні, мін), рівномірно по висоті
+	  // графіка (та сама формула height - ((v - min)/range)*(height-24) - 12,
+	  // що й для точок, — інакше підписи не збігатимуться з лінією).
+	  const tickCount = 4;
+	  for (let i = 0; i < tickCount; i++) {
+		const value = min + (range * i) / (tickCount - 1);
+		const y = height - ((value - min) / range) * (height - 24) - 12;
+		const gridline = document.createElementNS(svgNS, 'line');
+		gridline.setAttribute('x1', yAxisWidth);
+		gridline.setAttribute('x2', width);
+		gridline.setAttribute('y1', y.toFixed(1));
+		gridline.setAttribute('y2', y.toFixed(1));
+		gridline.setAttribute('class', 'rate-chart__gridline');
+		svg.appendChild(gridline);
 
-			  const currencySymbol = currentCurrency === 'EUR' ? '€' : '$';
-			  coords.forEach((pt) => {
-				  const circle = document.createElementNS(svgNS, 'circle');
-				  circle.setAttribute('cx', pt.x);
-				  circle.setAttribute('cy', pt.y);
-				  circle.setAttribute('r', 3);
-				  circle.setAttribute('class', 'rate-chart__point');
-				  circle.setAttribute('tabindex', '0');
-				  const label = `${formatDateFull(pt.date)}: ${formatRate(pt.rate)} ₴/${currencySymbol}`;
-				  circle.addEventListener('pointerenter', () => showTooltip(circle, label));
-				  circle.addEventListener('pointermove', () => showTooltip(circle, label));
-				  circle.addEventListener('pointerleave', hideTooltip);
-				  circle.addEventListener('focus', () => showTooltip(circle, label));
-				  circle.addEventListener('blur', hideTooltip);
-				  svg.appendChild(circle);
-			  });
+		const label = document.createElementNS(svgNS, 'text');
+		label.setAttribute('x', yAxisWidth - 8);
+		label.setAttribute('y', y.toFixed(1));
+		label.setAttribute('class', 'rate-chart__axis-label');
+		label.setAttribute('text-anchor', 'end');
+		label.setAttribute('dominant-baseline', 'middle');
+		label.textContent = value.toFixed(2);
+		svg.appendChild(label);
+	  }
 
-			  container.appendChild(svg);
-		  }
+	  const path = document.createElementNS(svgNS, 'path');
+	  path.setAttribute('d', pathD);
+	  path.setAttribute('class', 'rate-chart__line');
+	  svg.appendChild(path);
 
-		  function renderTable(series) {
-			  const tbody = document.getElementById('currency-table-body');
-			  tbody.innerHTML = '';
+	  const currencySymbol = currentCurrency === 'EUR' ? '€' : '$';
+	  coords.forEach((pt) => {
+	  const circle = document.createElementNS(svgNS, 'circle');
+	  circle.setAttribute('cx', pt.x);
+	  circle.setAttribute('cy', pt.y);
+	  circle.setAttribute('r', 3);
+	  circle.setAttribute('class', 'rate-chart__point');
+	  circle.setAttribute('tabindex', '0');
+	  const label = `${formatDateFull(pt.date)}: ${formatRate(pt.rate)} ₴/${currencySymbol}`;
+	  circle.addEventListener('pointerenter', () => showTooltip(circle, label));
+	  circle.addEventListener('pointermove', () => showTooltip(circle, label));
+	  circle.addEventListener('pointerleave', hideTooltip);
+	  circle.addEventListener('focus', () => showTooltip(circle, label));
+	  circle.addEventListener('blur', hideTooltip);
+	  svg.appendChild(circle);
+	  });
 
-			  [...series].reverse().forEach((point) => {
-				  const tr = document.createElement('tr');
-				  const dateCell = document.createElement('td');
-				  dateCell.textContent = formatDateFull(point.date);
-				  const rateCell = document.createElement('td');
-				  rateCell.textContent = formatRate(point.rate);
-				  tr.append(dateCell, rateCell);
-				  tbody.appendChild(tr);
-			  });
-		  }
+	  container.appendChild(svg);
+	  }
 
-		  function renderSummary(data) {
-			  document.getElementById('currency-start-rate').textContent = formatRate(data.start_rate);
-			  document.getElementById('currency-end-rate').textContent = formatRate(data.end_rate);
+	  function renderTable(series) {
+	  const tbody = document.getElementById('currency-table-body');
+	  tbody.innerHTML = '';
 
-			  const changeEl = document.getElementById('currency-change');
-			  changeEl.classList.remove('stats-kpi__value--income', 'stats-kpi__value--expense');
+	  [...series].reverse().forEach((point) => {
+	  const tr = document.createElement('tr');
+	  const dateCell = document.createElement('td');
+	  dateCell.textContent = formatDateFull(point.date);
+	  const rateCell = document.createElement('td');
+	  rateCell.textContent = formatRate(point.rate);
+	  tr.append(dateCell, rateCell);
+	  tbody.appendChild(tr);
+	  });
+	  }
 
-			  if (data.change_percent === null || data.change_percent === undefined) {
-				  changeEl.textContent = '—';
-				  directionBox.hidden = true;
-				  return;
-			  }
+	  function renderSummary(data) {
+	  document.getElementById('currency-start-rate').textContent = formatRate(data.start_rate);
+	  document.getElementById('currency-end-rate').textContent = formatRate(data.end_rate);
 
-			  const sign = data.change_percent > 0 ? '+' : '';
-			  changeEl.textContent = `${sign}${data.change_percent.toFixed(2)}%`;
+	  const changeEl = document.getElementById('currency-change');
+	  changeEl.classList.remove('stats-kpi__value--income', 'stats-kpi__value--expense');
 
-			  directionBox.hidden = false;
-			  if (data.direction === 'devaluation') {
-				  changeEl.classList.add('stats-kpi__value--expense');
-				  directionBox.textContent = 'Гривня девальвувала (курс зріс) за обраний період';
-				  directionBox.className = 'currency-direction currency-direction--down';
-			  } else if (data.direction === 'revaluation') {
-				  changeEl.classList.add('stats-kpi__value--income');
-				  directionBox.textContent = 'Гривня ревальвувала (курс впав) за обраний період';
-				  directionBox.className = 'currency-direction currency-direction--up';
-			  } else {
-				  directionBox.textContent = 'Курс не змінився за обраний період';
-				  directionBox.className = 'currency-direction';
-			  }
-		  }
+	  if (data.change_percent === null || data.change_percent === undefined) {
+	  changeEl.textContent = '—';
+	  directionBox.hidden = true;
+	  return;
+	  }
 
-		  async function fetchRates(start, end) {
-			  dialogBody.classList.add('is-loading');
-			  errorBox.hidden = true;
-			  warningBox.hidden = true;
+	  const sign = data.change_percent > 0 ? '+' : '';
+	  changeEl.textContent = `${sign}${data.change_percent.toFixed(2)}%`;
 
-			  try {
-				  const response = await fetch(`/currency/rates?start=${start}&end=${end}&currency=${currentCurrency}`);
+	  directionBox.hidden = false;
+	  if (data.direction === 'devaluation') {
+	  changeEl.classList.add('stats-kpi__value--expense');
+	  directionBox.textContent = 'Гривня девальвувала (курс зріс) за обраний період';
+	  directionBox.className = 'currency-direction currency-direction--down';
+	  } else if (data.direction === 'revaluation') {
+	  changeEl.classList.add('stats-kpi__value--income');
+	  directionBox.textContent = 'Гривня ревальвувала (курс впав) за обраний період';
+	  directionBox.className = 'currency-direction currency-direction--up';
+	  } else {
+	  directionBox.textContent = 'Курс не змінився за обраний період';
+	  directionBox.className = 'currency-direction';
+	  }
+	  }
+
+	  async function fetchRates(start, end) {
+	  dialogBody.classList.add('is-loading');
+	  errorBox.hidden = true;
+	  warningBox.hidden = true;
+
+	  try {
+	  const response = await fetch(`/currency/rates?start=${start}&end=${end}&currency=${currentCurrency}`);
 				  const data = await response.json();
 				  if (!response.ok) {
 					  throw new Error(data.error || 'Не вдалося завантажити курси валют');
