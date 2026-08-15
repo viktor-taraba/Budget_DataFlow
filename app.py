@@ -241,6 +241,53 @@ def get_exchange_rate(date_iso: str, currency: str = "USD") -> float:
     return None
 
 
+def get_latest_exchange_rate(currency: str):
+    """
+    Останній доступний курс НБУ для `currency` (USD/EUR) — для введення
+    валютних операцій, а не для історичного графіка (див.
+    get_exchange_rate_range нижче, який працює за період).
+
+    Пробує сьогоднішню дату за київським часом; якщо НБУ ще не опублікував
+    сьогоднішній курс (буває вранці) — пробує вчорашню. Якщо недоступний і
+    вчорашній курс — повертає (None, None), і викликач сам вирішує, як це
+    обробити (див. resolve_currency_amount).
+
+    Повертає (rate, date_iso) або (None, None).
+    """
+    today_iso = today_kyiv().isoformat()
+    rate = get_exchange_rate(today_iso, currency)
+    if rate is not None:
+        return rate, today_iso
+
+    yesterday_iso = (today_kyiv() - timedelta(days=1)).isoformat()
+    rate = get_exchange_rate(yesterday_iso, currency)
+    if rate is not None:
+        return rate, yesterday_iso
+
+    return None, None
+
+
+def resolve_currency_amount(currency: str, curr_amount: float):
+    """
+    Обчислює суму в гривнях (amount) для валютної операції (USD/EUR), за
+    останнім доступним курсом НБУ (get_latest_exchange_rate).
+
+    Якщо курс недоступний (НБУ не відповідає ні сьогодні, ні вчора) —
+    операція все одно зберігається: курс приймається за 1, а amount = curr_amount
+    (те саме числове значення в обох полях), і повертається текст попередження
+    для користувача — той самий принцип "не блокувати запис, попередити", що й
+    у add_emoji_if_missing.
+
+    Повертає (amount: float, exchange_rate: float, warning: str | None).
+    """
+    rate, _ = get_latest_exchange_rate(currency)
+    if rate is None:
+        return curr_amount, 1.0, (
+            "Курс НБУ недоступний — суму збережено без конвертації в гривні (курс 1)."
+        )
+    return round(curr_amount * rate, 2), rate, None
+
+
 def get_exchange_rate_range(start_date_iso: str, end_date_iso: str, currency: str = "USD") -> dict:
     """
     Отримує курс `currency` до UAH від НБУ за весь період одним запитом
@@ -403,13 +450,18 @@ def _write_row(ws, row_number: int, entry: dict):
     ws.update([values], f"A{row_number}:{_LAST_COLUMN}{row_number}", value_input_option="USER_ENTERED")
 
 
-def _ensure_subcategory_header(ws, columns):
-    """Дописує заголовок нового поля лише до аркушів старої структури."""
+def _ensure_new_column_headers(ws, columns):
+    """
+    Дописує заголовки нових полів (кінець COLUMN_ORDER) лише до аркушів
+    старої структури — раніше це стосувалось тільки 'subcategory', тепер
+    може дописати кілька відсутніх заголовків одразу (напр. curr_amount,
+    exchange_rate, currency), якщо аркуш ще старіший.
+    """
     if not hasattr(ws, "update_cell"):
         return
     header = ws.row_values(1)
-    if len(header) < len(columns):
-        ws.update_cell(1, len(columns), "subcategory")
+    for idx in range(len(header) + 1, len(columns) + 1):
+        ws.update_cell(1, idx, columns[idx - 1])
 
 
 def append_row(entry_type: str, row: dict, split_info=None):
@@ -428,9 +480,12 @@ def append_row(entry_type: str, row: dict, split_info=None):
     client = get_client()
     sheet = client.open_by_key(SHEET_ID)
     ws = sheet.worksheet(worksheet_for(entry_type))
-    _ensure_subcategory_header(ws, COLUMN_ORDER)
+    _ensure_new_column_headers(ws, COLUMN_ORDER)
 
     if split_info:
+        # Розбиті операції завжди в гривні (див. CLAUDE.md) — currency
+        # завжди "UAH", curr_amount/exchange_rate лишаються порожніми,
+        # незалежно від того, що міг тримати перемикач валюти у формі.
         split_id = str(uuid.uuid4())
         total_amount = sum(item["amount"] for item in split_info)
         split_info_json = json.dumps({
@@ -444,11 +499,19 @@ def append_row(entry_type: str, row: dict, split_info=None):
             row_data["amount"] = split_row["amount"]
             row_data["split_id"] = split_id
             row_data["split_info"] = split_info_json
+            row_data["currency"] = "UAH"
+            row_data["curr_amount"] = ""
+            row_data["exchange_rate"] = ""
 
             row_data["amount"] = _amount_for_sheet(row_data["amount"])
             ws.append_row([row_data.get(col, "") for col in COLUMN_ORDER], value_input_option="USER_ENTERED")
     else:
         row_data = {**row, "amount": _amount_for_sheet(row.get("amount", ""))}
+        row_data.setdefault("currency", "UAH")
+        if row_data.get("curr_amount", "") != "":
+            row_data["curr_amount"] = _amount_for_sheet(row_data["curr_amount"])
+        if row_data.get("exchange_rate", "") != "":
+            row_data["exchange_rate"] = _amount_for_sheet(row_data["exchange_rate"])
         ws.append_row([row_data.get(col, "") for col in COLUMN_ORDER], value_input_option="USER_ENTERED")
 
 
@@ -1057,7 +1120,7 @@ def delete_row(ws_name: str, row_number: int, expected_fingerprint: list, entry_
 
         if entry_type:
             deleted_ws = sheet.worksheet(WORKSHEET_DELETED)
-            _ensure_subcategory_header(deleted_ws, DELETED_COLUMN_ORDER)
+            _ensure_new_column_headers(deleted_ws, DELETED_COLUMN_ORDER)
             for _, entry in rows_to_delete:
                 deleted_entry = {**entry}
                 deleted_entry["deleted_at"] = datetime.now(timezone.utc).isoformat()
@@ -1076,7 +1139,7 @@ def delete_row(ws_name: str, row_number: int, expected_fingerprint: list, entry_
 
         if entry_type:
             deleted_ws = sheet.worksheet(WORKSHEET_DELETED)
-            _ensure_subcategory_header(deleted_ws, DELETED_COLUMN_ORDER)
+            _ensure_new_column_headers(deleted_ws, DELETED_COLUMN_ORDER)
             deleted_entry = {**current}
             deleted_entry["deleted_at"] = datetime.now(timezone.utc).isoformat()
             deleted_entry["income_or_expense"] = "income" if entry_type == "income" else "expense"
@@ -1387,15 +1450,19 @@ def index():
 @login_required
 def submit():
     entry_type = request.form.get("type")
-    amount = validate_amount(request.form.get("amount"))
+    raw_amount = validate_amount(request.form.get("amount"))
     category = request.form.get("category", "").strip()
     subcategory = request.form.get("subcategory", "").strip()
     entry_date_raw = request.form.get("date") or today_kyiv().isoformat()
     entry_date = validate_date(entry_date_raw)
     note = request.form.get("note", "").strip()
 
+    currency = request.form.get("currency", "UAH").strip().upper()
+    if currency not in ("UAH", "USD", "EUR"):
+        currency = "UAH"
+
     error = None
-    if amount is None:
+    if raw_amount is None:
         error = "Введіть коректну суму більше нуля"
     if entry_type not in ("income", "expense"):
         error = "Оберіть тип запису"
@@ -1405,12 +1472,28 @@ def submit():
         flash(error)
         return redirect(url_for("index"))
 
+    # Розбиті операції не підтримують валюту (див. CLAUDE.md) — перемикач
+    # ігнорується для split-гілки нижче незалежно від того, що надіслала форма.
+    currency_warning = None
+    if currency == "UAH":
+        amount = raw_amount
+        curr_amount = None
+        exchange_rate = None
+    else:
+        # У валютному режимі поле "amount" містить суму у введеній валюті,
+        # а не в гривнях — гривневий еквівалент рахується тут за курсом.
+        curr_amount = raw_amount
+        amount, exchange_rate, currency_warning = resolve_currency_amount(currency, curr_amount)
+
     split_breakdown_json = request.form.get("split_breakdown")
 
     if split_breakdown_json and entry_type == "expense":
+        # Розбивка завжди в гривні — незалежно від currency, беремо raw_amount
+        # (те, що фактично ввів користувач), а не потенційно сконвертовану
+        # валютну суму.
         try:
             split_breakdown = json.loads(split_breakdown_json)
-            is_valid, error_msg, split_rows = validate_split(split_breakdown, amount, entry_type)
+            is_valid, error_msg, split_rows = validate_split(split_breakdown, raw_amount, entry_type)
             if not is_valid:
                 flash(error_msg or "Помилка валідації розбивки")
                 return redirect(url_for("index"))
@@ -1422,7 +1505,7 @@ def submit():
             "date": entry_date,
             "category": "",
             "subcategory": "",
-            "amount": amount,
+            "amount": raw_amount,
             "note": note,
             "submitted_at": request.form.get("submitted_at", ""),
             "added_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -1455,7 +1538,11 @@ def submit():
             "submitted_at": request.form.get("submitted_at", ""),
             "added_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "device_info": request.headers.get("User-Agent", "unknown"),
+            "currency": currency,
         }
+        if currency != "UAH":
+            row["curr_amount"] = curr_amount
+            row["exchange_rate"] = exchange_rate
 
         try:
             append_row(entry_type, row)
@@ -1463,7 +1550,10 @@ def submit():
             flash(f"Помилка запису в таблицю: {exc}")
             return redirect(url_for("index"))
 
-        flash("Запис додано", "success")
+        success_message = "Запис додано"
+        if currency_warning:
+            success_message += ". " + currency_warning
+        flash(success_message, "success")
         return redirect(url_for("index"))
 
 
@@ -1567,11 +1657,15 @@ def edit():
             flash("Запис уже змінився або був видалений — оновіть сторінку")
         return redirect(url_for("index"))
     else:
-        amount = validate_amount(request.form.get("amount"))
+        raw_amount = validate_amount(request.form.get("amount"))
         category = request.form.get("category", "").strip()
         subcategory = request.form.get("subcategory", "").strip()
 
-        if amount is None:
+        currency = request.form.get("currency", "UAH").strip().upper()
+        if currency not in ("UAH", "USD", "EUR"):
+            currency = "UAH"
+
+        if raw_amount is None:
             flash("Сума повинна бути числом")
             return redirect(url_for("index"))
         if not category:
@@ -1581,13 +1675,33 @@ def edit():
             flash("Підкатегорія не належить обраній категорії")
             return redirect(url_for("index"))
 
+        # Курс переобчислюється "зараз" (останній доступний), а не береться
+        # зі старого запису — людина заново підтверджує суму на поточний момент.
+        currency_warning = None
+        if currency == "UAH":
+            amount = raw_amount
+            curr_amount = None
+            exchange_rate = None
+        else:
+            curr_amount = raw_amount
+            amount, exchange_rate, currency_warning = resolve_currency_amount(currency, curr_amount)
+
         updates = {
             "date": entry_date,
             "category": category,
             "subcategory": subcategory,
             "amount": _amount_for_sheet(amount),
             "note": note,
+            "currency": currency,
         }
+        if currency != "UAH":
+            updates["curr_amount"] = _amount_for_sheet(curr_amount)
+            updates["exchange_rate"] = _amount_for_sheet(exchange_rate)
+        else:
+            # Перемикання назад на UAH очищує валютні поля — інакше лишився б
+            # "осиротілий" курс/сума від попереднього збереження в USD/EUR.
+            updates["curr_amount"] = ""
+            updates["exchange_rate"] = ""
 
         try:
             updated = update_row(worksheet_for(entry_type), row_number, expected_fingerprint, updates)
@@ -1596,7 +1710,10 @@ def edit():
             return redirect(url_for("index"))
 
         if updated:
-            flash("Запис оновлено", "success")
+            success_message = "Запис оновлено"
+            if currency_warning:
+                success_message += ". " + currency_warning
+            flash(success_message, "success")
         else:
             flash("Запис уже змінився або був видалений — оновіть сторінку")
         return redirect(url_for("index"))
