@@ -240,49 +240,49 @@ def get_exchange_rate(date_iso: str, currency: str = "USD") -> float:
     return None
 
 
-def get_latest_exchange_rate(currency: str):
+def get_exchange_rate_for_date(date_iso: str, currency: str, max_lookback_days: int = 7):
     """
-    Останній доступний курс НБУ для `currency` (USD/EUR) — для введення
-    валютних операцій, а не для історичного графіка (див.
-    get_exchange_rate_range нижче, який працює за період).
+    Курс НБУ, "прив'язаний" до дати операції (а не до "сьогодні").
 
-    Пробує сьогоднішню дату за київським часом; якщо НБУ ще не опублікував
-    сьогоднішній курс (буває вранці) — пробує вчорашню. Якщо недоступний і
-    вчорашній курс — повертає (None, None), і викликач сам вирішує, як це
-    обробити (див. resolve_currency_amount).
+    Пробує саму дату операції; якщо НБУ не публікував курс на цей день
+    (вихідний/свято) — відступає по одному дню назад, максимум
+    max_lookback_days разів, і бере перший знайдений курс.
 
-    Повертає (rate, date_iso) або (None, None).
+    Повертає (rate, date_iso_used) або (None, None), якщо жоден з днів
+    у вікні пошуку не дав курсу.
     """
-    today_iso = today_kyiv().isoformat()
-    rate = get_exchange_rate(today_iso, currency)
-    if rate is not None:
-        return rate, today_iso
+    try:
+        base_date = datetime.strptime(date_iso, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None, None
 
-    yesterday_iso = (today_kyiv() - timedelta(days=1)).isoformat()
-    rate = get_exchange_rate(yesterday_iso, currency)
-    if rate is not None:
-        return rate, yesterday_iso
+    for offset in range(max_lookback_days + 1):
+        check_date = base_date - timedelta(days=offset)
+        check_iso = check_date.isoformat()
+        rate = get_exchange_rate(check_iso, currency)
+        if rate is not None:
+            return rate, check_iso
 
     return None, None
 
 
-def resolve_currency_amount(currency: str, curr_amount: float):
+def resolve_currency_amount(currency: str, curr_amount: float, entry_date: str):
     """
     Обчислює суму в гривнях (amount) для валютної операції (USD/EUR), за
-    останнім доступним курсом НБУ (get_latest_exchange_rate).
+    курсом НБУ на саму дату операції (entry_date) — а не на "сьогодні".
+    Якщо НБУ не публікував курс саме на цей день (вихідний/свято),
+    відступає на попередні дні (get_exchange_rate_for_date).
 
-    Якщо курс недоступний (НБУ не відповідає ні сьогодні, ні вчора) —
-    операція все одно зберігається: курс приймається за 1, а amount = curr_amount
-    (те саме числове значення в обох полях), і повертається текст попередження
-    для користувача — той самий принцип "не блокувати запис, попередити", що й
-    у add_emoji_if_missing.
+    Якщо курс недоступний узагалі в межах вікна пошуку — операція все одно
+    зберігається: курс приймається за 1, amount = curr_amount, і
+    повертається текст попередження.
 
     Повертає (amount: float, exchange_rate: float, warning: str | None).
     """
-    rate, _ = get_latest_exchange_rate(currency)
+    rate, used_date = get_exchange_rate_for_date(entry_date, currency)
     if rate is None:
         return curr_amount, 1.0, (
-            "Курс НБУ недоступний — суму збережено без конвертації в гривні (курс 1)."
+            "Курс НБУ недоступний на дату операції — суму збережено без конвертації в гривні (курс 1)."
         )
     return round(curr_amount * rate, 2), rate, None
 
@@ -1509,7 +1509,7 @@ def submit():
         # У валютному режимі поле "amount" містить суму у введеній валюті,
         # а не в гривнях — гривневий еквівалент рахується тут за курсом.
         curr_amount = raw_amount
-        amount, exchange_rate, currency_warning = resolve_currency_amount(currency, curr_amount)
+        amount, exchange_rate, currency_warning = resolve_currency_amount(currency, curr_amount, entry_date)
 
     split_breakdown_json = request.form.get("split_breakdown")
 
@@ -1710,7 +1710,7 @@ def edit():
             exchange_rate = None
         else:
             curr_amount = raw_amount
-            amount, exchange_rate, currency_warning = resolve_currency_amount(currency, curr_amount)
+            amount, exchange_rate, currency_warning = resolve_currency_amount(currency, curr_amount, entry_date)
 
         updates = {
             "date": entry_date,

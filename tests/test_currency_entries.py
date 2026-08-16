@@ -5,7 +5,7 @@
 
 Google Sheets тут підмінений фейковим клієнтом — той самий підхід, що й у
 tests/test_edit.py / tests/test_delete.py; курс НБУ підміняється через
-app_module.get_exchange_rate (або одразу app_module.get_latest_exchange_rate
+app_module.get_exchange_rate (або одразу app_module.get_exchange_rate_for_date
 для тестів маршрутів, щоб не залежати від дати "сьогодні").
 """
 import json
@@ -13,58 +13,47 @@ import json
 import pytest
 
 import app as app_module
-from app import COLUMN_ORDER, get_latest_exchange_rate, resolve_currency_amount
+from app import COLUMN_ORDER, get_exchange_rate_for_date, resolve_currency_amount
 
 
 def entry_from_row(row):
     return {col: (row[i] if i < len(row) else "") for i, col in enumerate(COLUMN_ORDER)}
 
 
-class TestGetLatestExchangeRate:
-    def test_uses_todays_rate_when_available(self, monkeypatch):
-        monkeypatch.setattr(app_module, "today_kyiv", lambda: app_module.date(2026, 8, 14))
+class TestGetExchangeRateForDate:
+    def test_uses_rate_on_the_exact_date(self, monkeypatch):
+        monkeypatch.setattr(app_module, "get_exchange_rate",
+            lambda d, currency="USD": 41.5 if d == "2026-07-10" else None)
+        rate, used = app_module.get_exchange_rate_for_date("2026-07-10", "USD")
+        assert rate == 41.5 and used == "2026-07-10"
 
-        def fake_rate(date_iso, currency="USD"):
-            return 41.5 if date_iso == "2026-08-14" else None
+    def test_falls_back_to_previous_days(self, monkeypatch):
+        monkeypatch.setattr(app_module, "get_exchange_rate",
+            lambda d, currency="USD": 41.0 if d == "2026-07-04" else None)
+        rate, used = app_module.get_exchange_rate_for_date("2026-07-06", "USD")  # sat -> fri
+        assert rate == 41.0 and used == "2026-07-04"
 
-        monkeypatch.setattr(app_module, "get_exchange_rate", fake_rate)
-        rate, used_date = get_latest_exchange_rate("USD")
-        assert rate == 41.5
-        assert used_date == "2026-08-14"
-
-    def test_falls_back_to_yesterday_when_today_missing(self, monkeypatch):
-        monkeypatch.setattr(app_module, "today_kyiv", lambda: app_module.date(2026, 8, 14))
-
-        def fake_rate(date_iso, currency="USD"):
-            return 41.0 if date_iso == "2026-08-13" else None
-
-        monkeypatch.setattr(app_module, "get_exchange_rate", fake_rate)
-        rate, used_date = get_latest_exchange_rate("USD")
-        assert rate == 41.0
-        assert used_date == "2026-08-13"
-
-    def test_returns_none_when_both_days_unavailable(self, monkeypatch):
-        monkeypatch.setattr(app_module, "today_kyiv", lambda: app_module.date(2026, 8, 14))
-        monkeypatch.setattr(app_module, "get_exchange_rate", lambda date_iso, currency="USD": None)
-        assert get_latest_exchange_rate("USD") == (None, None)
+    def test_returns_none_when_out_of_lookback_window(self, monkeypatch):
+        monkeypatch.setattr(app_module, "get_exchange_rate", lambda d, currency="USD": None)
+        assert app_module.get_exchange_rate_for_date("2026-07-10", "USD") == (None, None)
 
 
 class TestResolveCurrencyAmount:
     def test_converts_using_latest_rate(self, monkeypatch):
-        monkeypatch.setattr(app_module, "get_latest_exchange_rate", lambda currency: (40.0, "2026-08-14"))
-        amount, rate, warning = resolve_currency_amount("USD", 10.0)
+        monkeypatch.setattr(app_module, "get_exchange_rate_for_date", lambda date, currency: (40.0, "2026-08-14"))
+        amount, rate, warning = resolve_currency_amount("USD", 10.0, "2026-08-14")
         assert amount == 400.0
         assert rate == 40.0
         assert warning is None
 
     def test_rounds_to_two_decimals(self, monkeypatch):
-        monkeypatch.setattr(app_module, "get_latest_exchange_rate", lambda currency: (41.257, "2026-08-14"))
-        amount, rate, warning = resolve_currency_amount("EUR", 3.0)
+        monkeypatch.setattr(app_module, "get_exchange_rate_for_date", lambda date, currency: (41.257, "2026-08-14"))
+        amount, rate, warning = resolve_currency_amount("EUR", 3.0, "2026-08-14")
         assert amount == round(41.257 * 3.0, 2)
 
     def test_falls_back_to_rate_one_when_unavailable(self, monkeypatch):
-        monkeypatch.setattr(app_module, "get_latest_exchange_rate", lambda currency: (None, None))
-        amount, rate, warning = resolve_currency_amount("USD", 25.0)
+        monkeypatch.setattr(app_module, "get_exchange_rate_for_date", lambda date, currency: (None, None))
+        amount, rate, warning = resolve_currency_amount("USD", 25.0, "2026-08-14")
         assert amount == 25.0
         assert rate == 1.0
         assert warning is not None and "недоступний" in warning
@@ -115,7 +104,7 @@ class TestSubmitCurrency:
     def test_converts_usd_expense_using_latest_rate(self, logged_in_client, monkeypatch):
         client = FakeClient()
         monkeypatch.setattr(app_module, "get_client", lambda: client)
-        monkeypatch.setattr(app_module, "get_latest_exchange_rate", lambda currency: (41.5, "2026-08-14"))
+        monkeypatch.setattr(app_module, "get_exchange_rate_for_date", lambda date, currency: (41.5, "2026-08-14"))
 
         response = logged_in_client.post(
             "/submit",
@@ -136,7 +125,7 @@ class TestSubmitCurrency:
     def test_converts_eur_income(self, logged_in_client, monkeypatch):
         client = FakeClient()
         monkeypatch.setattr(app_module, "get_client", lambda: client)
-        monkeypatch.setattr(app_module, "get_latest_exchange_rate", lambda currency: (45.0, "2026-08-14"))
+        monkeypatch.setattr(app_module, "get_exchange_rate_for_date", lambda date, currency: (45.0, "2026-08-14"))
 
         response = logged_in_client.post(
             "/submit",
@@ -155,7 +144,7 @@ class TestSubmitCurrency:
     def test_falls_back_to_rate_one_and_warns_when_nbu_unavailable(self, logged_in_client, monkeypatch):
         client = FakeClient()
         monkeypatch.setattr(app_module, "get_client", lambda: client)
-        monkeypatch.setattr(app_module, "get_latest_exchange_rate", lambda currency: (None, None))
+        monkeypatch.setattr(app_module, "get_exchange_rate_for_date", lambda date, currency: (None, None))
 
         response = logged_in_client.post(
             "/submit",
@@ -193,7 +182,7 @@ class TestSubmitCurrency:
     def test_split_expense_ignores_currency_selector(self, logged_in_client, monkeypatch):
         client = FakeClient()
         monkeypatch.setattr(app_module, "get_client", lambda: client)
-        monkeypatch.setattr(app_module, "get_latest_exchange_rate", lambda currency: (41.5, "2026-08-14"))
+        monkeypatch.setattr(app_module, "get_exchange_rate_for_date", lambda date, currency: (41.5, "2026-08-14"))
 
         breakdown = [{"category": "🛒 Продукти", "amount": 100}, {"category": "🎭 Розваги", "amount": 200}]
         response = logged_in_client.post(
@@ -260,7 +249,7 @@ class TestEditCurrency:
         ws = FakeEditWorksheet([HEADER, make_currency_row("2026-08-01", "🛒 Продукти", "100,0")])
         client = FakeEditClient(ws)
         monkeypatch.setattr(app_module, "get_client", lambda: client)
-        monkeypatch.setattr(app_module, "get_latest_exchange_rate", lambda currency: (40.0, "2026-08-14"))
+        monkeypatch.setattr(app_module, "get_exchange_rate_for_date", lambda date, currency: (40.0, "2026-08-14"))
 
         response = logged_in_client.post(
             "/edit",
@@ -316,7 +305,7 @@ class TestEditCurrency:
         )
         client = FakeEditClient(ws)
         monkeypatch.setattr(app_module, "get_client", lambda: client)
-        monkeypatch.setattr(app_module, "get_latest_exchange_rate", lambda currency: (42.0, "2026-08-15"))
+        monkeypatch.setattr(app_module, "get_exchange_rate_for_date", lambda date, currency: (42.0, "2026-08-15"))
 
         logged_in_client.post(
             "/edit",
@@ -343,7 +332,7 @@ class TestEditCurrency:
         )
         client = FakeEditClient(ws)
         monkeypatch.setattr(app_module, "get_client", lambda: client)
-        monkeypatch.setattr(app_module, "get_latest_exchange_rate", lambda currency: (41.5, "2026-08-14"))
+        monkeypatch.setattr(app_module, "get_exchange_rate_for_date", lambda date, currency: (41.5, "2026-08-14"))
 
         # Застарілий (неправильний) fingerprint зі значенням curr_amount замість amount -> відмова.
         response = logged_in_client.post(
