@@ -1,13 +1,13 @@
 """
 Тести звіту електронною поштою (Resend): підсумок за період, рендер
 command-line стилю, надсилання через Resend API та "наздоганяючий" лист за
-вчора (стан зберігається у daily_report_state.json).
+вчора (стан "чи вже надіслано" зберігається в аркуші "Emails" тієї ж
+Google-таблиці, а не у файлі на диску — те саме, що вже було зроблено для
+categories.json → аркуш "Categories").
 
 Мережа (Resend API) підміняється через app_module.requests.post — той самий
 підхід, що й у tests/test_stats.py / tests/test_currency.py для requests.get.
 """
-import json
-
 import pytest
 
 import app as app_module
@@ -346,34 +346,67 @@ class TestSendReportEmail:
             send_report_email("2026-08-06", "2026-08-06")
 
 
+class FakeEmailLogWorksheet:
+    def __init__(self, rows=None):
+        self.rows = rows if rows is not None else [list(app_module.EMAIL_LOG_COLUMN_ORDER)]
+
+    def get_all_values(self):
+        return [list(r) for r in self.rows]
+
+    def append_row(self, values, value_input_option=None):
+        self.rows.append(list(values))
+
+
+class FakeEmailLogClient:
+    """
+    Той самий трюк, що й у фейкових клієнтах Categories: перший worksheet()
+    кидає WorksheetNotFound, add_worksheet() створює його — так тестується
+    і гілка "аркуш уже існує", і гілка "створюємо вперше".
+    """
+    def __init__(self, ws=None, exists=True):
+        self.ws = ws or FakeEmailLogWorksheet()
+        self.exists = exists
+
+    def open_by_key(self, key):
+        return self
+
+    def worksheet(self, name):
+        if name == app_module.WORKSHEET_EMAIL_LOG and self.exists:
+            return self.ws
+        raise app_module.gspread.WorksheetNotFound(name)
+
+    def add_worksheet(self, title, rows, cols):
+        self.exists = True
+        return self.ws
+
+
 class TestMaybeSendYesterdayReport:
     @pytest.fixture(autouse=True)
-    def _isolate_state(self, monkeypatch, tmp_path):
-        state_path = tmp_path / "daily_report_state.json"
-        monkeypatch.setattr(app_module, "DAILY_REPORT_STATE_PATH", str(state_path))
+    def _isolate_state(self, monkeypatch):
         monkeypatch.setattr(app_module, "_daily_report_confirmed_date", None)
         monkeypatch.setattr(app_module, "DAILY_REPORT_EMAIL", "me@example.com")
         monkeypatch.setattr(app_module, "RESEND_API_KEY", "re_fake_key")
         yield
 
-    def test_sends_and_persists_state_when_not_sent_yet(self, monkeypatch):
+    def test_sends_and_logs_to_emails_sheet_when_not_sent_yet(self, monkeypatch):
+        fake_client = FakeEmailLogClient()
+        monkeypatch.setattr(app_module, "get_client", lambda: fake_client)
         calls = []
-
         def fake_send(start, end):
             calls.append((start, end))
             return True
 
         monkeypatch.setattr(app_module, "send_report_email", fake_send)
-
         maybe_send_yesterday_report()
 
         yesterday = (app_module.today_kyiv() - app_module.timedelta(days=1)).isoformat()
         assert calls == [(yesterday, yesterday)]
-        with open(app_module.DAILY_REPORT_STATE_PATH, "r", encoding="utf-8") as f:
-            state = json.load(f)
-        assert state["last_sent_date"] == yesterday
+        logged_dates = [row[0] for row in fake_client.ws.rows[1:]]
+        assert logged_dates == [yesterday]
 
-    def test_skips_when_already_sent_today_process(self, monkeypatch):
+    def test_skips_when_already_sent_this_process(self, monkeypatch):
+        fake_client = FakeEmailLogClient()
+        monkeypatch.setattr(app_module, "get_client", lambda: fake_client)
         calls = []
         monkeypatch.setattr(app_module, "send_report_email", lambda s, e: calls.append((s, e)) or True)
 
@@ -382,28 +415,32 @@ class TestMaybeSendYesterdayReport:
 
         assert len(calls) == 1
 
-    def test_skips_when_state_file_already_has_yesterday(self, monkeypatch):
+    def test_skips_when_emails_sheet_already_has_yesterday(self, monkeypatch):
+        # Регресійний випадок для самого бага: інший процес (попередній
+        # контейнер, до сну/redeploy) уже надіслав і залогував вчорашній
+        # лист у Sheets — новий процес не повинен дублювати його.
         yesterday = (app_module.today_kyiv() - app_module.timedelta(days=1)).isoformat()
-        with open(app_module.DAILY_REPORT_STATE_PATH, "w", encoding="utf-8") as f:
-            json.dump({"last_sent_date": yesterday}, f)
+        ws = FakeEmailLogWorksheet(
+            rows=[list(app_module.EMAIL_LOG_COLUMN_ORDER), [yesterday, "2026-08-06T22:00:00+00:00"]]
+        )
+        fake_client = FakeEmailLogClient(ws)
+        monkeypatch.setattr(app_module, "get_client", lambda: fake_client)
 
         def fail(*args, **kwargs):
-            raise AssertionError("не мав звертатись до send_report_email — вже надіслано")
+            raise AssertionError("не мав звертатись до send_report_email — вже надіслано (за Sheets)")
 
         monkeypatch.setattr(app_module, "send_report_email", fail)
-
         maybe_send_yesterday_report()  # не повинно кидати помилку
 
-    def test_does_not_persist_state_on_failure(self, monkeypatch):
+    def test_does_not_log_on_send_failure(self, monkeypatch):
+        fake_client = FakeEmailLogClient()
+        monkeypatch.setattr(app_module, "get_client", lambda: fake_client)
         def boom(start, end):
             raise RuntimeError("Resend недоступний")
 
         monkeypatch.setattr(app_module, "send_report_email", boom)
-
         maybe_send_yesterday_report()  # не кидає — ловиться всередині
-
-        import os
-        assert not os.path.exists(app_module.DAILY_REPORT_STATE_PATH)
+        assert len(fake_client.ws.rows) == 1  # лише заголовок, нічого не дописано
 
     def test_does_nothing_without_resend_config(self, monkeypatch):
         monkeypatch.setattr(app_module, "DAILY_REPORT_EMAIL", None)
@@ -412,9 +449,26 @@ class TestMaybeSendYesterdayReport:
             raise AssertionError("не мав звертатись до send_report_email без конфігурації")
 
         monkeypatch.setattr(app_module, "send_report_email", fail)
-
         maybe_send_yesterday_report()
 
+    def test_does_not_break_or_send_when_sheets_unavailable(self, monkeypatch):
+        # Той самий "не ламати застосунок" принцип, що й get_recent_entries():
+        # якщо Sheets недоступний, ми не можемо перевірити стан, тому просто
+        # нічого не робимо цього разу — і не ризикуємо надіслати дублікат.
+        def boom():
+            raise RuntimeError("Sheets недоступний")
+        monkeypatch.setattr(app_module, "get_client", boom)
+        def fail(*args, **kwargs):
+            raise AssertionError("не мав звертатись до send_report_email, якщо не вдалось перевірити стан")
+        monkeypatch.setattr(app_module, "send_report_email", fail)
+        maybe_send_yesterday_report()  # не кидає помилку
+
+    def test_creates_emails_sheet_on_first_use(self, monkeypatch):
+        fake_client = FakeEmailLogClient(exists=False)
+        monkeypatch.setattr(app_module, "get_client", lambda: fake_client)
+        monkeypatch.setattr(app_module, "send_report_email", lambda s, e: True)
+        maybe_send_yesterday_report()
+        assert fake_client.ws.rows[0] == list(app_module.EMAIL_LOG_COLUMN_ORDER)
 
 class TestSendReportRoute:
     @pytest.fixture(autouse=True)

@@ -16,8 +16,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
 import gspread
 from google.oauth2.service_account import Credentials
-from config import COLUMN_ORDER, DELETED_COLUMN_ORDER, WORKSHEET_EXPENSE, WORKSHEET_INCOME, WORKSHEET_DELETED, WORKSHEET_CATEGORIES
-
+from config import COLUMN_ORDER, DELETED_COLUMN_ORDER, WORKSHEET_EXPENSE, WORKSHEET_INCOME, WORKSHEET_DELETED, WORKSHEET_CATEGORIES, WORKSHEET_EMAIL_LOG, EMAIL_LOG_COLUMN_ORDER
 # Кешування частоти категорій (раз на день)
 _category_frequency_cache = None
 _category_frequency_date = None
@@ -772,20 +771,41 @@ RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
 RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "onboarding@resend.dev")
 DAILY_REPORT_EMAIL = os.environ.get("DAILY_REPORT_EMAIL")
 
-DAILY_REPORT_STATE_PATH = "daily_report_state.json"
 
-
-def _load_daily_report_state() -> dict:
+def _email_log_worksheet():
+    """
+    Аркуш 'Emails' у тій самій таблиці — журнал уже надісланих щоденних
+    звітів (один рядок на дату, за яку лист фактично пішов). Живе в Google
+    Sheets, а не на диску процесу: диск на Render не персистентний, тому
+    попередній варіант (daily_report_state.json) губився при кожному
+    новому контейнері — застосунок "забував", що вчорашній лист уже
+    надіслано, і дублював його на кожен запит після сну/redeploy.
+    Створюється автоматично при першому зверненні, якщо його ще немає —
+    той самий принцип, що й у _categories_worksheet().
+    """
+    client = get_client()
+    sheet = client.open_by_key(SHEET_ID)
     try:
-        with open(DAILY_REPORT_STATE_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+        return sheet.worksheet(WORKSHEET_EMAIL_LOG)
+    except gspread.WorksheetNotFound:
+        ws = sheet.add_worksheet(title=WORKSHEET_EMAIL_LOG, rows=1, cols=len(EMAIL_LOG_COLUMN_ORDER))
+        ws.append_row(EMAIL_LOG_COLUMN_ORDER, value_input_option="RAW")
+        return ws
 
 
-def _save_daily_report_state(state: dict) -> None:
-    with open(DAILY_REPORT_STATE_PATH, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+def _report_already_sent(date_iso: str) -> bool:
+    """Чи є в аркуші Emails запис про вже надісланий звіт за цю дату."""
+    ws = _email_log_worksheet()
+    rows = ws.get_all_values()
+    sent_dates = {row[0] for row in rows[1:] if row}
+    return date_iso in sent_dates
+
+
+def _mark_report_sent(date_iso: str) -> None:
+    """Дописує рядок про надісланий звіт до аркуша Emails."""
+    ws = _email_log_worksheet()
+    sent_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    ws.append_row([date_iso, sent_at], value_input_option="RAW")
 
 
 def _spans_at_most_n_calendar_months(start_date: str, end_date: str, n: int) -> bool:
@@ -993,9 +1013,9 @@ def send_report_email(start_date: str, end_date: str) -> bool:
 
 
 # "Наздоганяючий" лист за вчора. _daily_report_confirmed_date кешує в пам'яті
-# процесу дату, за яку вже точно підтверджено відправку, щоб не читати
-# daily_report_state.json на кожен запит; _daily_report_lock захищає від
-# гонки, якщо кілька запитів прийдуть одночасно одразу після старту процесу.
+# процесу дату, за яку вже точно підтверджено відправку, щоб не читати аркуш
+# Emails на кожен запит; _daily_report_lock захищає від гонки, якщо кілька
+# запитів прийдуть одночасно одразу після старту процесу.
 _daily_report_lock = threading.Lock()
 _daily_report_confirmed_date = None
 
@@ -1003,14 +1023,9 @@ _daily_report_confirmed_date = None
 def maybe_send_yesterday_report():
     """
     Якщо звіт за вчорашній день (за Києвом) ще не надіслано — надсилає його
-    зараз. Стан ("за яку дату востаннє надіслано") зберігається у
-    daily_report_state.json, щоб повторний виклик (наступний запит, новий
-    деплой) не дублював лист.
-
-    Примітка: цей файл, як і categories.json, живе на диску процесу — на
-    Render без persistent-диску він не переживає редеплой, тож зрідка після
-    деплою можливий один зайвий лист. Це прийнятний компроміс для
-    однокористувацького застосунку.
+    зараз. "Чи вже надіслано" перевіряється за аркушем Emails (не за файлом
+    на диску — той не переживає redeploy/сон на Render і саме через це лист
+    раніше дублювався на кожен запит після пробудження).
     """
     global _daily_report_confirmed_date
 
@@ -1019,14 +1034,21 @@ def maybe_send_yesterday_report():
 
     yesterday = (today_kyiv() - timedelta(days=1)).isoformat()
     if _daily_report_confirmed_date == yesterday:
-        return  # вже підтверджено в цьому процесі — не читаємо файл повторно
+        return  # вже підтверджено в цьому процесі — не читаємо Sheets повторно
 
     with _daily_report_lock:
         if _daily_report_confirmed_date == yesterday:
             return
 
-        state = _load_daily_report_state()
-        if state.get("last_sent_date") == yesterday:
+        try:
+            already_sent = _report_already_sent(yesterday)
+        except Exception:
+            # Sheets тимчасово недоступний — не блокуємо запит і не
+            # позначаємо нічого; спробуємо перевірити знову наступного разу
+            # (те саме "не ламати застосунок", що й get_recent_entries()).
+            return
+
+        if already_sent:
             _daily_report_confirmed_date = yesterday
             return
 
@@ -1036,10 +1058,14 @@ def maybe_send_yesterday_report():
             sent = False
 
         if sent:
-            _save_daily_report_state({"last_sent_date": yesterday})
-            _daily_report_confirmed_date = yesterday
-        # Якщо не вдалось — нічого не зберігаємо й не кешуємо, наступний
-        # запит (наприклад, коли дайн прокинеться знову) спробує ще раз.
+            try:
+                _mark_report_sent(yesterday)
+                _daily_report_confirmed_date = yesterday
+            except Exception:
+                # Лист пішов, але позначку в Emails записати не вдалось —
+                # наступний запит спробує ще раз. Один можливий зайвий лист
+                # ліпший за втрачений запис/поламаний застосунок.
+                pass
 
 
 @app.before_request
