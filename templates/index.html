@@ -26,6 +26,7 @@
 	  <button type="button" class="theme-toggle" id="categories-toggle" aria-label="Керування категоріями" title="Керування категоріями">⚙️</button>
 	  <button type="button" class="theme-toggle" id="stats-toggle" aria-label="Статистика" title="Статистика">📊</button>
 	  <button type="button" class="theme-toggle" id="report-toggle" aria-label="Надіслати звіт на пошту" title="Надіслати звіт на пошту">📧</button>
+	  <button type="button" class="theme-toggle" id="insights-toggle" aria-label="AI-поради по бюджету" title="AI-поради по бюджету">🧠</button>
 	  <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Перемкнути тему" title="Перемкнути світлу/темну тему">🌙</button>
 	</div>
   </div>
@@ -273,6 +274,39 @@
 		</form>
 	  </div>
 	</div>
+  </div>
+
+  {#
+    Модальне вікно AI-порад по бюджету. Дані завантажуються лише при
+    відкритті/зміні періоду (POST /insights, як і /stats — не на кожен GET /).
+    Надсилання на пошту — окрема кнопка, лише за явним запитом користувача.
+  #}
+  <div class="categories-overlay" id="insights-overlay" hidden>
+    <div class="categories-dialog" role="dialog" aria-modal="true" aria-labelledby="insights-title">
+      <div class="categories-dialog__header">
+        <h2 id="insights-title" class="categories-dialog__title">AI-поради по бюджету</h2>
+        <button type="button" class="categories-close" id="insights-close" aria-label="Закрити">✕</button>
+      </div>
+      <div class="categories-body">
+        <div class="stats-presets" role="group" aria-label="Період аналізу" id="insights-presets">
+          <button type="button" class="stats-preset" data-insights-period="current-month">Поточний місяць</button>
+          <button type="button" class="stats-preset" data-insights-period="previous-month">Попередній місяць</button>
+        </div>
+
+        <div class="insights-loading" id="insights-loading" hidden>Аналізуємо витрати…</div>
+        <div class="insights-text" id="insights-text" hidden></div>
+        <div class="stats-error" id="insights-error" hidden></div>
+
+        <form method="post" action="{{ url_for('send_insights_route') }}" id="insights-send-form">
+          <input type="hidden" name="start" id="insights-send-start">
+          <input type="hidden" name="end" id="insights-send-end">
+          <input type="hidden" name="text" id="insights-send-text">
+          <div class="edit-actions" id="insights-actions" hidden>
+            <button type="submit" class="btn btn-secondary" id="insights-send-email">Надіслати на пошту</button>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 
   {# Модальне вікно редагування запису #}
@@ -1125,6 +1159,82 @@
 	  });
 	  document.getElementById('report-close').addEventListener('click', () => { overlay.hidden = true; });
 	  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.hidden = true; });
+	  })();
+  </script>
+
+  <script>
+	  // AI-поради по бюджету
+	  (function () {
+		  const overlay = document.getElementById('insights-overlay');
+		  const closeBtn = document.getElementById('insights-close');
+		  const presetButtons = document.querySelectorAll('#insights-presets .stats-preset');
+		  const loadingBox = document.getElementById('insights-loading');
+		  const textBox = document.getElementById('insights-text');
+		  const errorBox = document.getElementById('insights-error');
+		  const actionsBox = document.getElementById('insights-actions');
+		  const sendForm = document.getElementById('insights-send-form');
+
+		  let currentResult = null; // {start, end, text}
+		  let loaded = false;
+
+		  function setActivePreset(button) {
+			  presetButtons.forEach((btn) => btn.classList.toggle('is-active', btn === button));
+		  }
+
+		  async function loadInsights(period, button) {
+			  loadingBox.hidden = false;
+			  textBox.hidden = true;
+			  errorBox.hidden = true;
+			  actionsBox.hidden = true;
+			  currentResult = null;
+			  setActivePreset(button);
+
+			  try {
+				  const response = await fetch('/insights', {
+					  method: 'POST',
+					  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					  body: `period=${encodeURIComponent(period)}`,
+				  });
+				  const data = await response.json();
+				  if (!response.ok) {
+					  throw new Error(data.error || 'Не вдалося отримати поради');
+				  }
+				  currentResult = data;
+				  textBox.textContent = data.text;
+				  textBox.hidden = false;
+				  actionsBox.hidden = false;
+			  } catch (err) {
+				  errorBox.textContent = err.message || 'Не вдалося отримати поради';
+				  errorBox.hidden = false;
+			  } finally {
+				  loadingBox.hidden = true;
+			  }
+		  }
+
+		  presetButtons.forEach((btn) => {
+			  btn.addEventListener('click', () => loadInsights(btn.dataset.insightsPeriod, btn));
+		  });
+
+		  sendForm.addEventListener('submit', (e) => {
+			  if (!currentResult) {
+				  e.preventDefault();
+				  return;
+			  }
+			  document.getElementById('insights-send-start').value = currentResult.start;
+			  document.getElementById('insights-send-end').value = currentResult.end;
+			  document.getElementById('insights-send-text').value = currentResult.text;
+		  });
+
+		  document.getElementById('insights-toggle').addEventListener('click', () => {
+			  overlay.hidden = false;
+			  if (!loaded) {
+				  loaded = true;
+				  const defaultBtn = document.querySelector('#insights-presets .stats-preset[data-insights-period="current-month"]');
+				  loadInsights('current-month', defaultBtn);
+			  }
+		  });
+		  closeBtn.addEventListener('click', () => { overlay.hidden = true; });
+		  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.hidden = true; });
 	  })();
   </script>
 
