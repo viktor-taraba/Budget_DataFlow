@@ -16,6 +16,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
 import gspread
 from google.oauth2.service_account import Credentials
+import agent
 from config import COLUMN_ORDER, DELETED_COLUMN_ORDER, WORKSHEET_EXPENSE, WORKSHEET_INCOME, WORKSHEET_DELETED, WORKSHEET_CATEGORIES, WORKSHEET_EMAIL_LOG, EMAIL_LOG_COLUMN_ORDER
 # Кешування частоти категорій (раз на день)
 _category_frequency_cache = None
@@ -649,6 +650,26 @@ def _date_range(start_date: str, end_date: str) -> list:
     return days
 
 
+def _month_range(period: str, today: date = None):
+    """
+    (start_iso, end_iso) для 'current-month' (1-ше число цього місяця —
+    сьогодні) чи 'previous-month' (весь попередній календарний місяць),
+    відносно `today` (за замовчуванням — today_kyiv()). Використовується
+    маршрутом /insights для вибору періоду AI-порад.
+    """
+    if today is None:
+        today = today_kyiv()
+    if period == "previous-month":
+        first_of_this_month = today.replace(day=1)
+        last_of_previous = first_of_this_month - timedelta(days=1)
+        start = last_of_previous.replace(day=1)
+        end = last_of_previous
+    else:
+        start = today.replace(day=1)
+        end = today
+    return start.isoformat(), end.isoformat()
+
+
 def _aggregate_stats(entries, start_date: str, end_date: str) -> dict:
     """
     Агрегує записи одного аркуша в межах [start_date, end_date] (включно):
@@ -1005,6 +1026,67 @@ def send_report_email(start_date: str, end_date: str) -> bool:
             "subject": f"Бюджет · звіт за {_report_period_label(summary)}",
             "text": render_report_text(summary),
             "html": render_report_html(summary),
+        },
+        timeout=10,
+    )
+    response.raise_for_status()
+    return True
+
+
+def get_budget_insights_summary(start_date: str, end_date: str) -> dict:
+    """
+    Агреговані по категоріях доходи й витрати за період — вхідні дані для
+    AI-поради (agent.generate_budget_insights). Перевикористовує
+    get_period_stats(), тому працює однаково для /stats і /insights і не
+    заводить окремого шляху читання Sheets.
+    """
+    expense = get_period_stats(WORKSHEET_EXPENSE, start_date, end_date)
+    income = get_period_stats(WORKSHEET_INCOME, start_date, end_date)
+    return {
+        "start": start_date,
+        "end": end_date,
+        "income": income["categories"],
+        "expense": expense["categories"],
+        "income_total": income["total"],
+        "expense_total": expense["total"],
+    }
+
+
+def render_insights_html(text: str, period_label: str) -> str:
+    """Той самий термінальний стиль листа, що й render_report_html()."""
+    escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        "<!DOCTYPE html><html><body style=\"margin:0;padding:24px;background:#0d1117;\">"
+        "<pre style=\"font-family:'JetBrains Mono','Courier New',monospace;font-size:14px;"
+        "line-height:1.5;color:#c9d1d9;background:#0d1117;margin:0;white-space:pre-wrap;\">"
+        f"$ budget --insights --period {period_label}\n{'-' * 34}\n{escaped}</pre></body></html>"
+    )
+
+
+def send_insights_email(start_date: str, end_date: str, text: str) -> bool:
+    """
+    Надсилає вже згенерований AI-текст поради на DAILY_REPORT_EMAIL через
+    Resend — лише коли викликано явно (кнопка "Надіслати на пошту" у вікні
+    порад), ніколи автоматично, на відміну від send_report_email(), яка має
+    catch-up гілку. Повертає False без надсилання, якщо email/ключ не
+    налаштовані — той самий "тихо вимкнено без ключа" підхід.
+    """
+    if not (DAILY_REPORT_EMAIL and RESEND_API_KEY):
+        return False
+
+    period_label = start_date if start_date == end_date else f"{start_date} – {end_date}"
+    response = requests.post(
+        "https://api.resend.com/emails",
+        headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "from": RESEND_FROM_EMAIL,
+            "to": [DAILY_REPORT_EMAIL],
+            "subject": f"Бюджет · AI-поради за {period_label}",
+            "text": f"$ budget --insights --period {period_label}\n{'-' * 34}\n{text}",
+            "html": render_insights_html(text, period_label),
         },
         timeout=10,
     )
@@ -1855,6 +1937,61 @@ def send_report_route():
         return redirect(url_for("index"))
 
     flash("Звіт надіслано на пошту" if sent else "Не вдалося надіслати звіт", "success" if sent else None)
+    return redirect(url_for("index"))
+
+
+@app.route("/insights", methods=["POST"])
+@login_required
+def insights():
+    """
+    Генерує AI-підсумок + поради за категоріями (доходи й витрати) для
+    поточного або попереднього календарного місяця. Ніколи не надсилає
+    пошту сам — це окрема дія (/insights/send), лише за запитом користувача.
+    """
+    period = request.form.get("period")
+    if period not in ("current-month", "previous-month"):
+        period = "current-month"
+    start_date, end_date = _month_range(period)
+
+    if not OPENAI_API_KEY:
+        return jsonify({"error": "AI-поради не налаштовано (немає OPENAI_API_KEY у середовищі)"}), 503
+
+    try:
+        summary = get_budget_insights_summary(start_date, end_date)
+    except Exception as exc:
+        return jsonify({"error": f"Не вдалося завантажити дані для аналізу: {exc}"}), 502
+
+    try:
+        text = agent.generate_budget_insights(summary, OPENAI_API_KEY)
+    except Exception as exc:
+        return jsonify({"error": f"Не вдалося отримати відповідь від AI: {exc}"}), 502
+
+    return jsonify({"start": start_date, "end": end_date, "period": period, "text": text})
+
+
+@app.route("/insights/send", methods=["POST"])
+@login_required
+def send_insights_route():
+    """Надсилає вже згенеровану на клієнті AI-пораду на пошту — лише коли користувач явно натиснув кнопку."""
+    start_date = validate_date(request.form.get("start")) or today_kyiv().isoformat()
+    end_date = validate_date(request.form.get("end")) or start_date
+    text = request.form.get("text", "").strip()
+
+    if not text:
+        flash("Немає тексту поради для надсилання")
+        return redirect(url_for("index"))
+
+    if not (DAILY_REPORT_EMAIL and RESEND_API_KEY):
+        flash("Розсилку не налаштовано (немає RESEND_API_KEY/email у середовищі)")
+        return redirect(url_for("index"))
+
+    try:
+        send_insights_email(start_date, end_date, text)
+    except Exception as exc:
+        flash(f"Помилка надсилання поради: {exc}")
+        return redirect(url_for("index"))
+
+    flash("Поради надіслано на пошту", "success")
     return redirect(url_for("index"))
 
 
